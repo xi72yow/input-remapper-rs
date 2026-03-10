@@ -33,6 +33,28 @@ input-remapper-rs record --device "USB Gaming Mouse"
 
 ## Install
 
+### APT Repository (recommended)
+
+```bash
+curl -fsSL https://xi72yow.github.io/input-remapper-rs/install.sh | sudo bash
+```
+
+Or manually:
+
+```bash
+# Add GPG key
+curl -fsSL https://xi72yow.github.io/input-remapper-rs/key.gpg | sudo gpg --dearmor -o /usr/share/keyrings/input-remapper-rs.gpg
+
+# Add repository
+echo "deb [arch=amd64 signed-by=/usr/share/keyrings/input-remapper-rs.gpg] https://xi72yow.github.io/input-remapper-rs stable main" \
+  | sudo tee /etc/apt/sources.list.d/input-remapper-rs.list
+
+# Install
+sudo apt update && sudo apt install input-remapper-rs
+```
+
+### Manual .deb install
+
 ```bash
 sudo dpkg -i input-remapper-rs_0.1.0-1_amd64.deb
 ```
