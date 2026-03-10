@@ -16,6 +16,10 @@ pub struct MappingHandler {
     debug: bool,
 }
 
+fn syn_report() -> InputEvent {
+    InputEvent::new(EventType::SYNCHRONIZATION.0, 0, 0)
+}
+
 impl MappingHandler {
     /// Build a handler from preset entries and a symbol map.
     pub fn from_preset(entries: &[MappingEntry], xmodmap: &SymbolMap, debug: bool) -> Self {
@@ -58,15 +62,15 @@ impl MappingHandler {
         Self { mappings, debug }
     }
 
-    /// Remap a single input event. Returns the events to emit.
-    /// For unmapped events, returns the original event unchanged.
-    pub fn remap(&self, event: &InputEvent) -> Vec<InputEvent> {
+    /// Remap a single input event, appending the results to `out`.
+    /// For unmapped events, the original event is appended unchanged.
+    /// A single syn_report() is appended at the end of each remapped group.
+    pub fn remap_into(&self, event: &InputEvent, out: &mut Vec<InputEvent>) {
         // Only remap KEY events
         if event.event_type() != EventType::KEY {
-            return vec![*event];
+            out.push(*event);
+            return;
         }
-
-        let syn = InputEvent::new(EventType::SYNCHRONIZATION.0, 0, 0);
 
         if let Some(mapping) = self.mappings.get(&event.code()) {
             if self.debug {
@@ -76,33 +80,29 @@ impl MappingHandler {
 
             if mapping.output_codes.len() == 1 {
                 // Simple key remap
-                return vec![
-                    InputEvent::new(EventType::KEY.0, mapping.output_codes[0], value),
-                    syn,
-                ];
+                out.push(InputEvent::new(EventType::KEY.0, mapping.output_codes[0], value));
+                out.push(syn_report());
+                return;
             }
 
             // Key combination (e.g. Ctrl+C)
-            let mut events = Vec::new();
             if value == 1 {
-                // Press: press all modifier keys, then the last key
+                // Press: press all keys, single SYN at the end
                 for &code in &mapping.output_codes {
-                    events.push(InputEvent::new(EventType::KEY.0, code, 1));
-                    events.push(syn);
+                    out.push(InputEvent::new(EventType::KEY.0, code, 1));
                 }
+                out.push(syn_report());
             } else if value == 0 {
-                // Release: release in reverse order
+                // Release: release in reverse order, single SYN at the end
                 for &code in mapping.output_codes.iter().rev() {
-                    events.push(InputEvent::new(EventType::KEY.0, code, 0));
-                    events.push(syn);
+                    out.push(InputEvent::new(EventType::KEY.0, code, 0));
                 }
+                out.push(syn_report());
             }
             // Ignore repeat (value=2) for combinations
-
-            events
         } else {
             // No mapping, pass through
-            vec![*event]
+            out.push(*event);
         }
     }
 }

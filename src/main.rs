@@ -223,14 +223,16 @@ fn main() {
                 std::process::exit(1);
             });
 
-            // Stop on Ctrl+C
-            let stop_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-            let flag_clone = stop_flag.clone();
+            // Stop on Ctrl+C via stop signal
+            let stop_writer = service
+                .create_stop_signal()
+                .expect("Failed to create stop signal");
+            let stop_writer = std::sync::Mutex::new(Some(stop_writer));
             ctrlc::set_handler(move || {
-                flag_clone.store(true, std::sync::atomic::Ordering::Relaxed);
+                // Drop the writer to wake up the poll loop
+                let _ = stop_writer.lock().unwrap().take();
             })
             .expect("Failed to set signal handler");
-            service.set_stop_flag(stop_flag);
 
             if let Err(e) = service.run() {
                 eprintln!("Injection error: {}", e);
@@ -440,7 +442,8 @@ mod tests {
 
         // Press button 2
         let press = InputEvent::new(EventType::KEY.0, 2, 1);
-        let result = handler.remap(&press);
+        let mut result = Vec::new();
+        handler.remap_into(&press, &mut result);
         let keys: Vec<&InputEvent> = result.iter().filter(|e| e.event_type() == EventType::KEY).collect();
         assert_eq!(keys.len(), 1);
         assert_eq!(keys[0].code(), 158); // XF86Back
@@ -448,11 +451,49 @@ mod tests {
 
         // Release button 2
         let release = InputEvent::new(EventType::KEY.0, 2, 0);
-        let result = handler.remap(&release);
+        result.clear();
+        handler.remap_into(&release, &mut result);
         let keys: Vec<&InputEvent> = result.iter().filter(|e| e.event_type() == EventType::KEY).collect();
         assert_eq!(keys.len(), 1);
         assert_eq!(keys[0].code(), 158);
         assert_eq!(keys[0].value(), 0);
+    }
+
+    #[test]
+    fn remap_combination_emits_single_syn() {
+        // Verify that a key combination (e.g. Ctrl+C) only emits one SYN_REPORT
+        // at the end, not one after each key.
+        let preset_json = r#"[
+            {
+                "input_combination": [{ "type": 1, "code": 2 }],
+                "target_uinput": "keyboard",
+                "output_symbol": "Control_L + c",
+                "mapping_type": "key_macro"
+            }
+        ]"#;
+        let xmodmap_json = r#"{ "Control_L": 29, "c": 46 }"#;
+
+        let entries: Vec<config::MappingEntry> = serde_json::from_str(preset_json).unwrap();
+        let xmodmap: config::SymbolMap = serde_json::from_str(xmodmap_json).unwrap();
+        let handler = MappingHandler::from_preset(&entries, &xmodmap, false);
+
+        let press = InputEvent::new(EventType::KEY.0, 2, 1);
+        let mut result = Vec::new();
+        handler.remap_into(&press, &mut result);
+
+        let syn_count = result.iter().filter(|e| e.event_type() == EventType::SYNCHRONIZATION).count();
+        assert_eq!(syn_count, 1, "Combination press should emit exactly one SYN_REPORT");
+        // SYN should be the last event
+        assert_eq!(result.last().unwrap().event_type(), EventType::SYNCHRONIZATION);
+
+        // Same for release
+        result.clear();
+        let release = InputEvent::new(EventType::KEY.0, 2, 0);
+        handler.remap_into(&release, &mut result);
+
+        let syn_count = result.iter().filter(|e| e.event_type() == EventType::SYNCHRONIZATION).count();
+        assert_eq!(syn_count, 1, "Combination release should emit exactly one SYN_REPORT");
+        assert_eq!(result.last().unwrap().event_type(), EventType::SYNCHRONIZATION);
     }
 
     #[test]
@@ -474,7 +515,8 @@ mod tests {
 
         // Press button 2 → should emit Ctrl press, C press
         let press = InputEvent::new(EventType::KEY.0, 2, 1);
-        let result = handler.remap(&press);
+        let mut result = Vec::new();
+        handler.remap_into(&press, &mut result);
         let keys: Vec<&InputEvent> = result.iter().filter(|e| e.event_type() == EventType::KEY).collect();
         assert_eq!(keys.len(), 2);
         assert_eq!(keys[0].code(), 29);  // Control_L press
@@ -484,7 +526,8 @@ mod tests {
 
         // Release button 2 → should emit C release, Ctrl release (reverse order)
         let release = InputEvent::new(EventType::KEY.0, 2, 0);
-        let result = handler.remap(&release);
+        result.clear();
+        handler.remap_into(&release, &mut result);
         let keys: Vec<&InputEvent> = result.iter().filter(|e| e.event_type() == EventType::KEY).collect();
         assert_eq!(keys.len(), 2);
         assert_eq!(keys[0].code(), 46);  // c release first
@@ -539,7 +582,7 @@ mod tests {
         let events = reader.read_events(2000).unwrap().expect("events");
         let mut remapped = Vec::new();
         for event in &events {
-            remapped.extend(handler.remap(event));
+            handler.remap_into(event, &mut remapped);
         }
         writer.emit(&remapped).unwrap();
 

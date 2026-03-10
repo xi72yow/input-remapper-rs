@@ -3,14 +3,13 @@ use crate::mapping::config::{self, SymbolMap};
 use crate::mapping::handler::MappingHandler;
 use nix::poll::{poll, PollFd, PollFlags, PollTimeout};
 use std::os::fd::AsFd;
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 
 pub struct InjectionService {
     device_paths: Vec<PathBuf>,
     handler: MappingHandler,
-    stop_flag: Option<Arc<AtomicBool>>,
+    stop_reader: Option<UnixStream>,
 }
 
 impl InjectionService {
@@ -26,7 +25,7 @@ impl InjectionService {
         Ok(Self {
             device_paths,
             handler,
-            stop_flag: None,
+            stop_reader: None,
         })
     }
 
@@ -40,19 +39,17 @@ impl InjectionService {
         Self {
             device_paths,
             handler,
-            stop_flag: None,
+            stop_reader: None,
         }
     }
 
-    /// Set an external stop flag (used by daemon manager)
-    pub fn set_stop_flag(&mut self, flag: Arc<AtomicBool>) {
-        self.stop_flag = Some(flag);
-    }
-
-    fn should_stop(&self) -> bool {
-        self.stop_flag
-            .as_ref()
-            .is_some_and(|f| f.load(Ordering::Relaxed))
+    /// Create a stop signal pair. Returns the writer end that the caller
+    /// can use to signal stop (by writing a byte or dropping it).
+    pub fn create_stop_signal(&mut self) -> std::io::Result<UnixStream> {
+        let (reader, writer) = UnixStream::pair()?;
+        reader.set_nonblocking(true)?;
+        self.stop_reader = Some(reader);
+        Ok(writer)
     }
 
     pub fn run(&mut self) -> std::io::Result<()> {
@@ -64,24 +61,41 @@ impl InjectionService {
         }
 
         let mut writer = DeviceWriter::new_keyboard_mouse("input-remapper-rs")?;
+        let mut remapped = Vec::new();
 
-        while !self.should_stop() {
-            // Poll all FDs at once, collect which indices are ready
+        loop {
             let ready_indices = {
-                let borrowed_fds: Vec<_> = readers.iter().map(|r| r.fd().as_fd()).collect();
+                let mut borrowed_fds: Vec<_> =
+                    readers.iter().map(|r| r.fd().as_fd()).collect();
+
+                // Append stop fd as the last entry
+                let has_stop_fd = self.stop_reader.is_some();
+                if let Some(ref stop) = self.stop_reader {
+                    borrowed_fds.push(stop.as_fd());
+                }
+
                 let mut pollfds: Vec<PollFd> = borrowed_fds
                     .iter()
                     .map(|fd| PollFd::new(*fd, PollFlags::POLLIN))
                     .collect();
 
-                let ready = poll(&mut pollfds, PollTimeout::from(100u16))?;
-                if ready == 0 {
-                    continue;
+                poll(&mut pollfds, PollTimeout::NONE)?;
+
+                // Check if stop fd was signaled
+                if has_stop_fd {
+                    let stop_idx = pollfds.len() - 1;
+                    if pollfds[stop_idx]
+                        .revents()
+                        .is_some_and(|r| r.intersects(PollFlags::POLLIN | PollFlags::POLLHUP))
+                    {
+                        break;
+                    }
                 }
 
                 pollfds
                     .iter()
                     .enumerate()
+                    .take(readers.len())
                     .filter(|(_, pfd)| {
                         pfd.revents()
                             .is_some_and(|r| r.contains(PollFlags::POLLIN))
@@ -89,23 +103,23 @@ impl InjectionService {
                     .map(|(i, _)| i)
                     .collect::<Vec<_>>()
             };
-            // Borrow of readers is dropped here
 
+            // Batch events from all ready devices into a single emit
+            remapped.clear();
             for i in ready_indices {
                 match readers[i].fetch_events() {
                     Ok(events) => {
-                        let mut remapped = Vec::new();
                         for event in &events {
-                            remapped.extend(self.handler.remap(event));
-                        }
-                        if !remapped.is_empty() {
-                            writer.emit(&remapped)?;
+                            self.handler.remap_into(event, &mut remapped);
                         }
                     }
                     Err(e) => {
                         eprintln!("Error reading events from reader {}: {}", i, e);
                     }
                 }
+            }
+            if !remapped.is_empty() {
+                writer.emit(&remapped)?;
             }
         }
 

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
+use std::io::Write;
+use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use crate::device::discover;
@@ -11,8 +11,16 @@ use crate::mapping::config;
 struct RunningInjection {
     device_name: String,
     preset_name: String,
-    stop_flag: Arc<AtomicBool>,
+    stop_writer: UnixStream,
     thread: Option<JoinHandle<()>>,
+}
+
+impl RunningInjection {
+    fn signal_stop(&mut self) {
+        // Writing a byte wakes up the poll loop; if the write fails
+        // (e.g. reader already dropped), that's fine too.
+        let _ = self.stop_writer.write_all(&[1]);
+    }
 }
 
 pub struct DaemonManager {
@@ -89,22 +97,29 @@ impl DaemonManager {
         let xmodmap = self.xmodmap.clone();
         let debug = self.debug;
         let device_paths = dev_info.paths.clone();
-        let stop_flag = Arc::new(AtomicBool::new(false));
-        let stop_clone = Arc::clone(&stop_flag);
         let dev_name_for_log = dev_info.name.clone();
         let preset_for_log = preset_name.to_string();
+
+        // Create the service and stop signal before spawning the thread
+        let mut service =
+            crate::daemon::service::InjectionService::from_entries(
+                device_paths, &entries, &xmodmap, debug,
+            );
+
+        let stop_writer = match service.create_stop_signal() {
+            Ok(w) => w,
+            Err(e) => {
+                return Response::Error {
+                    message: format!("Failed to create stop signal: {}", e),
+                }
+            }
+        };
 
         let thread = std::thread::spawn(move || {
             eprintln!(
                 "Starting injection for '{}' with preset '{}'",
                 dev_name_for_log, preset_for_log
             );
-
-            let mut service =
-                crate::daemon::service::InjectionService::from_entries(
-                    device_paths, &entries, &xmodmap, debug,
-                );
-            service.set_stop_flag(stop_clone);
 
             if let Err(e) = service.run() {
                 eprintln!("Injection error for '{}': {}", dev_name_for_log, e);
@@ -119,7 +134,7 @@ impl DaemonManager {
             RunningInjection {
                 device_name: dev_info.name,
                 preset_name: preset_name.to_string(),
-                stop_flag,
+                stop_writer,
                 thread: Some(thread),
             },
         );
@@ -131,7 +146,7 @@ impl DaemonManager {
 
     fn stop_injection(&mut self, device_name: &str) -> Response {
         if let Some(mut injection) = self.injections.remove(device_name) {
-            injection.stop_flag.store(true, Ordering::Relaxed);
+            injection.signal_stop();
             if let Some(thread) = injection.thread.take() {
                 let _ = thread.join();
             }
@@ -147,9 +162,10 @@ impl DaemonManager {
 
     fn stop_all(&mut self) -> Response {
         let device_names: Vec<String> = self.injections.keys().cloned().collect();
+        // Signal all to stop
         for name in &device_names {
-            if let Some(injection) = self.injections.get(name) {
-                injection.stop_flag.store(true, Ordering::Relaxed);
+            if let Some(injection) = self.injections.get_mut(name) {
+                injection.signal_stop();
             }
         }
         // Wait for all threads
