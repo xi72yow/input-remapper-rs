@@ -37,7 +37,7 @@ jobs:
         run: cargo build --release
 
       - name: Run tests
-        run: sudo env "PATH=$PATH" cargo test
+        run: sudo env "PATH=$HOME/.cargo/bin:$PATH" "RUSTUP_HOME=$RUSTUP_HOME" cargo test
 
   package:
     needs: test
