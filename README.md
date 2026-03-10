@@ -51,12 +51,16 @@ echo "deb [arch=amd64 signed-by=/usr/share/keyrings/input-remapper-rs.gpg] https
 
 # Install
 sudo apt update && sudo apt install input-remapper-rs
+
+# Enable and start the service
+sudo systemctl enable --now input-remapper-rs
 ```
 
 ### Manual .deb install
 
 ```bash
 sudo dpkg -i input-remapper-rs_0.1.0-1_amd64.deb
+sudo systemctl enable --now input-remapper-rs
 ```
 
 Config goes in `/etc/input-remapper-rs/`:

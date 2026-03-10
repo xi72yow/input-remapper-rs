@@ -19,5 +19,8 @@ echo "deb [arch=amd64 signed-by=/usr/share/keyrings/input-remapper-rs.gpg] ${REP
 apt-get update
 apt-get install -y input-remapper-rs
 
+# Enable and start the systemd service
+systemctl enable --now input-remapper-rs
+
 echo "input-remapper-rs has been installed successfully!"
-echo "The systemd service is enabled. Check status with: systemctl status input-remapper-rs"
+echo "The systemd service is running. Check status with: systemctl status input-remapper-rs"
