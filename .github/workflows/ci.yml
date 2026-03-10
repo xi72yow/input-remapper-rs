@@ -17,6 +17,8 @@ on:
 
 permissions:
   contents: write
+  pages: write
+  id-token: write
 
 jobs:
   test:
@@ -54,9 +56,13 @@ jobs:
     needs: test
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.release == 'yes'
     runs-on: ubuntu-latest
+    outputs:
+      skipped: ${{ steps.version.outputs.skip }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -88,7 +94,6 @@ jobs:
             CURRENT_REV=$(echo "$LATEST_TAG" | sed "s/${BASE}-//")
             NEW_REV=$((CURRENT_REV + 1))
           else
-            # Check if base tag exists without revision
             if git rev-parse "${BASE}" >/dev/null 2>&1; then
               NEW_REV=2
             else
@@ -121,6 +126,25 @@ jobs:
           echo "=== Verify systemd unit ==="
           systemctl cat input-remapper-rs.service
 
+      - name: Prepare packages directory
+        run: |
+          mkdir -p packages
+          cp target/debian/*.deb packages/
+
+      - name: Import GPG key
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          echo "${GPG_PRIVATE_KEY}" | gpg --batch --import
+
+      - name: Update APT repository
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dpkg-dev apt-utils
+          ./scripts/update-repo.sh
+
       - name: Create tag
         run: |
           git config user.name "github-actions[bot]"
@@ -134,3 +158,20 @@ jobs:
           tag_name: ${{ steps.version.outputs.tag }}
           files: target/debian/*.deb
           generate_release_notes: true
+
+      - name: Upload repo artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: repo/
+
+  deploy-pages:
+    needs: release
+    if: needs.release.result == 'success'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
