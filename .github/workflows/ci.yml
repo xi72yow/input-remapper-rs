@@ -103,13 +103,14 @@ jobs:
 
           TAG="${BASE}-${NEW_REV}"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "revision=${NEW_REV}" >> "$GITHUB_OUTPUT"
           echo "Release tag: ${TAG}"
 
       - name: Install cargo-deb
         run: cargo install cargo-deb
 
       - name: Build .deb
-        run: cargo deb
+        run: cargo deb --deb-revision "${{ steps.version.outputs.revision }}"
 
       - name: Test .deb package
         run: |
