@@ -37,7 +37,7 @@ jobs:
         run: cargo build --release
 
       - name: Run tests
-        run: sudo cargo test
+        run: sudo env "PATH=$PATH" cargo test
 
   package:
     needs: test
