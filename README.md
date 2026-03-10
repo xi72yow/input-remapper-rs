@@ -64,9 +64,8 @@ Config goes in `/etc/input-remapper-rs/`:
 /etc/input-remapper-rs/
   config.json          # autoload settings
   xmodmap.json         # symbol -> keycode map
-  presets/
-    <Device Name>/
-      <Preset>.json
+  <Device Name>/
+    <Preset>.json
 ```
 
 ### Example: MMO Mouse (Utech Smart Venus)
@@ -81,7 +80,7 @@ Config goes in `/etc/input-remapper-rs/`:
 }
 ```
 
-`/etc/input-remapper-rs/presets/USB Gaming Mouse/Utech Smart Mouse.json`:
+`/etc/input-remapper-rs/USB Gaming Mouse/Utech Smart Mouse.json`:
 ```json
 [
     {

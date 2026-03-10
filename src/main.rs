@@ -202,7 +202,6 @@ fn main() {
                 });
 
             let preset_path = config_dir
-                .join("presets")
                 .join(&dev_info.name)
                 .join(format!("{}.json", preset));
 

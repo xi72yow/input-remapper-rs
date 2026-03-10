@@ -68,7 +68,6 @@ impl DaemonManager {
         // Load preset
         let preset_path = self
             .config_dir
-            .join("presets")
             .join(&dev_info.name)
             .join(format!("{}.json", preset_name));
 
