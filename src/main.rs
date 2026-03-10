@@ -600,4 +600,97 @@ mod tests {
         assert_eq!(key_events[2].code(), 46);  // c release
         assert_eq!(key_events[3].code(), 29);  // Ctrl release
     }
+
+    #[test]
+    fn remap_passthrough_unmapped_key() {
+        // An unmapped KEY event should pass through unchanged
+        let handler = MappingHandler::from_preset(&[], &config::SymbolMap::new(), false);
+
+        let press = InputEvent::new(EventType::KEY.0, 30, 1); // KEY_A
+        let mut result = Vec::new();
+        handler.remap_into(&press, &mut result);
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].event_type(), EventType::KEY);
+        assert_eq!(result[0].code(), 30);
+        assert_eq!(result[0].value(), 1);
+    }
+
+    #[test]
+    fn remap_passthrough_non_key_events() {
+        // Non-KEY events (e.g. REL_X mouse movement) should pass through unchanged
+        let preset_json = r#"[{
+            "input_combination": [{ "type": 1, "code": 2 }],
+            "target_uinput": "keyboard",
+            "output_symbol": "a",
+            "mapping_type": "key_macro"
+        }]"#;
+        let xmodmap_json = r#"{ "a": 30 }"#;
+        let entries: Vec<config::MappingEntry> = serde_json::from_str(preset_json).unwrap();
+        let xmodmap: config::SymbolMap = serde_json::from_str(xmodmap_json).unwrap();
+        let handler = MappingHandler::from_preset(&entries, &xmodmap, false);
+
+        // REL_X event (mouse movement)
+        let rel_event = InputEvent::new(EventType::RELATIVE.0, 0, 5);
+        let mut result = Vec::new();
+        handler.remap_into(&rel_event, &mut result);
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].event_type(), EventType::RELATIVE);
+        assert_eq!(result[0].code(), 0);
+        assert_eq!(result[0].value(), 5);
+
+        // SYN event
+        let syn = InputEvent::new(EventType::SYNCHRONIZATION.0, 0, 0);
+        result.clear();
+        handler.remap_into(&syn, &mut result);
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].event_type(), EventType::SYNCHRONIZATION);
+    }
+
+    #[test]
+    fn remap_repeat_single_key() {
+        // Repeat (value=2) should work for single key remaps
+        let preset_json = r#"[{
+            "input_combination": [{ "type": 1, "code": 2 }],
+            "target_uinput": "keyboard",
+            "output_symbol": "a",
+            "mapping_type": "key_macro"
+        }]"#;
+        let xmodmap_json = r#"{ "a": 30 }"#;
+        let entries: Vec<config::MappingEntry> = serde_json::from_str(preset_json).unwrap();
+        let xmodmap: config::SymbolMap = serde_json::from_str(xmodmap_json).unwrap();
+        let handler = MappingHandler::from_preset(&entries, &xmodmap, false);
+
+        let repeat = InputEvent::new(EventType::KEY.0, 2, 2);
+        let mut result = Vec::new();
+        handler.remap_into(&repeat, &mut result);
+
+        let keys: Vec<&InputEvent> = result.iter().filter(|e| e.event_type() == EventType::KEY).collect();
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0].code(), 30);
+        assert_eq!(keys[0].value(), 2);
+    }
+
+    #[test]
+    fn remap_repeat_combination_ignored() {
+        // Repeat (value=2) should be ignored for key combinations
+        let preset_json = r#"[{
+            "input_combination": [{ "type": 1, "code": 2 }],
+            "target_uinput": "keyboard",
+            "output_symbol": "Control_L + c",
+            "mapping_type": "key_macro"
+        }]"#;
+        let xmodmap_json = r#"{ "Control_L": 29, "c": 46 }"#;
+        let entries: Vec<config::MappingEntry> = serde_json::from_str(preset_json).unwrap();
+        let xmodmap: config::SymbolMap = serde_json::from_str(xmodmap_json).unwrap();
+        let handler = MappingHandler::from_preset(&entries, &xmodmap, false);
+
+        let repeat = InputEvent::new(EventType::KEY.0, 2, 2);
+        let mut result = Vec::new();
+        handler.remap_into(&repeat, &mut result);
+
+        assert!(result.is_empty(), "Repeat should produce no events for combinations");
+    }
 }
