@@ -3,9 +3,17 @@ name: CI
 on:
   push:
     branches: [main]
-    tags: ["v*"]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      release:
+        description: "Create a release? (yes/no)"
+        required: true
+        default: "no"
+      version:
+        description: "Version tag (e.g. v0.1.0). Leave empty to use Cargo.toml version."
+        required: false
 
 permissions:
   contents: write
@@ -42,9 +50,9 @@ jobs:
       - name: Run tests
         run: sudo target/debug/deps/input_remapper_rs-* --test-threads=1
 
-  package:
+  release:
     needs: test
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.release == 'yes'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -62,6 +70,35 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            BASE="${{ github.event.inputs.version }}"
+          else
+            VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+            BASE="v${VERSION}"
+          fi
+
+          # Find latest revision for this version
+          git fetch --tags
+          LATEST_TAG=$(git tag -l "${BASE}-*" --sort=-v:refname | head -1)
+          if [ -n "$LATEST_TAG" ]; then
+            CURRENT_REV=$(echo "$LATEST_TAG" | sed "s/${BASE}-//")
+            NEW_REV=$((CURRENT_REV + 1))
+          else
+            # Check if base tag exists without revision
+            if git rev-parse "${BASE}" >/dev/null 2>&1; then
+              NEW_REV=2
+            else
+              NEW_REV=1
+            fi
+          fi
+
+          TAG="${BASE}-${NEW_REV}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Release tag: ${TAG}"
 
       - name: Install cargo-deb
         run: cargo install cargo-deb
@@ -84,8 +121,16 @@ jobs:
           echo "=== Verify systemd unit ==="
           systemctl cat input-remapper-rs.service
 
+      - name: Create tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "${{ steps.version.outputs.tag }}"
+          git push origin "${{ steps.version.outputs.tag }}"
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.version.outputs.tag }}
           files: target/debian/*.deb
           generate_release_notes: true
