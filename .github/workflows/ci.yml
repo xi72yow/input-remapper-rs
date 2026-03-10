@@ -36,8 +36,11 @@ jobs:
       - name: Build
         run: cargo build --release
 
+      - name: Build tests
+        run: cargo test --no-run
+
       - name: Run tests
-        run: sudo env "PATH=$HOME/.cargo/bin:$PATH" "RUSTUP_HOME=$RUSTUP_HOME" cargo test
+        run: sudo target/debug/deps/input_remapper_rs-* --test-threads=1
 
   package:
     needs: test
