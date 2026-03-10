@@ -1,0 +1,16 @@
+services:
+  dev:
+    build: .
+    privileged: true
+    volumes:
+      - /dev:/dev
+      - .:/app
+      - cargo-cache:/usr/local/cargo/registry
+      - cargo-target:/app/target
+      - ./dist:/app/dist
+    stdin_open: true
+    tty: true
+
+volumes:
+  cargo-cache:
+  cargo-target:

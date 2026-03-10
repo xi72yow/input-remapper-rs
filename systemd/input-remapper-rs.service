@@ -1,0 +1,13 @@
+[Unit]
+Description=Input Remapper RS Daemon
+After=local-fs.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/input-remapper-rs --config-dir /etc/input-remapper-rs daemon
+ExecStartPost=/usr/bin/input-remapper-rs autoload
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
