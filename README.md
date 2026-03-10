@@ -69,6 +69,50 @@ Config goes in `/etc/input-remapper-rs/`:
       <Preset>.json
 ```
 
+### Example: MMO Mouse (Utech Smart Venus)
+
+`/etc/input-remapper-rs/config.json`:
+```json
+{
+    "version": "2.1.1",
+    "autoload": {
+        "USB Gaming Mouse": "Utech Smart Mouse"
+    }
+}
+```
+
+`/etc/input-remapper-rs/presets/USB Gaming Mouse/Utech Smart Mouse.json`:
+```json
+[
+    {
+        "input_combination": [{ "type": 1, "code": 2, "origin_hash": "..." }],
+        "target_uinput": "keyboard",
+        "output_symbol": "Control_L + c",
+        "mapping_type": "key_macro"
+    },
+    {
+        "input_combination": [{ "type": 1, "code": 3, "origin_hash": "..." }],
+        "target_uinput": "keyboard",
+        "output_symbol": "Control_L + v",
+        "mapping_type": "key_macro"
+    },
+    {
+        "input_combination": [{ "type": 1, "code": 8, "origin_hash": "..." }],
+        "target_uinput": "keyboard",
+        "output_symbol": "XF86Back",
+        "mapping_type": "key_macro"
+    },
+    {
+        "input_combination": [{ "type": 1, "code": 5, "origin_hash": "..." }],
+        "target_uinput": "keyboard",
+        "output_symbol": "XF86Forward",
+        "mapping_type": "key_macro"
+    }
+]
+```
+
+Use `input-remapper-rs record --device "USB Gaming Mouse"` to find the correct `type`/`code` values for your buttons. The `origin_hash` is the device hash shown in `list-devices --json`.
+
 ## Build
 
 ```bash
