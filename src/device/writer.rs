@@ -7,6 +7,7 @@ pub struct DeviceWriter {
 
 impl DeviceWriter {
     /// Create a virtual keyboard device that can emit any key.
+    #[allow(dead_code)]
     pub fn new_keyboard(name: &str) -> std::io::Result<Self> {
         let mut keys = AttributeSet::<KeyCode>::new();
         for code in 0..768u16 {

@@ -84,6 +84,7 @@ pub enum InputAction {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ConfirmAction {
     DeletePreset,
+    #[allow(dead_code)]
     DeleteMapping,
     Quit,
 }

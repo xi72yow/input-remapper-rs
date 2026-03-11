@@ -218,12 +218,24 @@ fn main() {
         }
         Commands::Autoload => {
             let request = ipc::protocol::Request::Autoload;
-            match ipc::client::send_request(&request) {
-                Ok(response) => print_response(&response),
-                Err(e) => {
-                    eprintln!("Error: {}", e);
-                    std::process::exit(1);
+            // Retry connecting to the daemon (it may still be starting up)
+            let mut last_err = None;
+            for _ in 0..10 {
+                match ipc::client::send_request(&request) {
+                    Ok(response) => {
+                        print_response(&response);
+                        last_err = None;
+                        break;
+                    }
+                    Err(e) => {
+                        last_err = Some(e);
+                        std::thread::sleep(std::time::Duration::from_millis(500));
+                    }
                 }
+            }
+            if let Some(e) = last_err {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
             }
         }
         Commands::RunForeground { device, preset } => {
