@@ -7,30 +7,10 @@ Rust rewrite of [input-remapper](https://github.com/sezanzeb/input-remapper), fo
 ## Features
 
 - Key-to-key and key-to-combination remapping (e.g. mouse button -> Ctrl+C)
-- Multi-device support with simultaneous polling
-- Daemon mode with Unix socket IPC
-- Systemd service with autoload
+- Multi-device support with simultaneous mapping
 - Terminal UI (TUI) for interactive configuration
+- Daemon with systemd service and autoload
 - ~1.4MB static binary, microsecond-level latency
-
-## Usage
-
-```bash
-# List devices
-input-remapper-rs list-devices --json
-
-# Start/stop via daemon
-input-remapper-rs daemon                                          # Terminal 1
-input-remapper-rs start --device "USB Gaming Mouse" --preset "My Preset"
-input-remapper-rs status
-input-remapper-rs stop --device "USB Gaming Mouse"
-
-# Or run directly without daemon
-input-remapper-rs run-foreground --device "USB Gaming Mouse" --preset "My Preset"
-
-# Record events from a device
-input-remapper-rs record --device "USB Gaming Mouse"
-```
 
 ## Install
 
@@ -64,7 +44,28 @@ sudo dpkg -i input-remapper-rs_0.1.0-1_amd64.deb
 sudo systemctl enable --now input-remapper-rs
 ```
 
-Config goes in `/etc/input-remapper-rs/`:
+## Usage
+
+Once the daemon is running via systemd, open the TUI to configure your devices:
+
+```bash
+sudo input-remapper-rs tui
+```
+
+The TUI lets you:
+
+- Browse and select input devices
+- Create, edit, and delete presets
+- Record input events to capture key/button codes
+- Search and assign output symbols (keysyms)
+- Apply presets and monitor injection status
+
+Each mapped device gets its own virtual clone via uinput. Multiple devices can be mapped simultaneously.
+
+## Configuration
+
+Config is stored in `/etc/input-remapper-rs/`:
+
 ```
 /etc/input-remapper-rs/
   config.json          # autoload settings
@@ -73,64 +74,16 @@ Config goes in `/etc/input-remapper-rs/`:
     <Preset>.json
 ```
 
-### Example: MMO Mouse (Utech Smart Venus)
+Presets configured with autoload in `config.json` are automatically applied when the daemon starts:
 
-`/etc/input-remapper-rs/config.json`:
 ```json
 {
     "version": "2.1.1",
     "autoload": {
-        "USB Gaming Mouse": "Utech Smart Mouse"
+        "USB Gaming Mouse": "My Preset"
     }
 }
 ```
-
-`/etc/input-remapper-rs/USB Gaming Mouse/Utech Smart Mouse.json`:
-```json
-[
-    {
-        "input_combination": [{ "type": 1, "code": 2, "origin_hash": "..." }],
-        "target_uinput": "keyboard",
-        "output_symbol": "Control_L + c",
-        "mapping_type": "key_macro"
-    },
-    {
-        "input_combination": [{ "type": 1, "code": 3, "origin_hash": "..." }],
-        "target_uinput": "keyboard",
-        "output_symbol": "Control_L + v",
-        "mapping_type": "key_macro"
-    },
-    {
-        "input_combination": [{ "type": 1, "code": 8, "origin_hash": "..." }],
-        "target_uinput": "keyboard",
-        "output_symbol": "XF86Back",
-        "mapping_type": "key_macro"
-    },
-    {
-        "input_combination": [{ "type": 1, "code": 5, "origin_hash": "..." }],
-        "target_uinput": "keyboard",
-        "output_symbol": "XF86Forward",
-        "mapping_type": "key_macro"
-    }
-]
-```
-
-Use `input-remapper-rs record --device "USB Gaming Mouse"` to find the correct `type`/`code` values for your buttons. The `origin_hash` is the device hash shown in `list-devices --json`.
-
-## TUI
-
-Interactive terminal UI for configuring devices and presets:
-
-```bash
-sudo input-remapper-rs tui
-```
-
-- Browse and select input devices
-- Create, edit, and delete presets
-- Record input events to capture key/button codes
-- Search and assign output symbols (keysyms)
-- Apply presets and monitor injection status
-- Requires root (needs access to evdev devices and daemon socket)
 
 ## Development
 
