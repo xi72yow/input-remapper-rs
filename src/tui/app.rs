@@ -856,3 +856,505 @@ fn filter_symbols(symbols: &[(String, u16)], query: &str) -> Vec<(String, u16)> 
     });
     results
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ipc::protocol::{KeyInfoResponse, RecordEvent};
+    use crate::tui::widgets::key_matrix::{KeyMatrixState, KeyState};
+    use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
+
+    fn test_symbols() -> Vec<(String, u16)> {
+        vec![
+            ("KEY_A".into(), 30),
+            ("KEY_B".into(), 48),
+            ("KEY_BACKSPACE".into(), 14),
+            ("KEY_ENTER".into(), 28),
+            ("Control_L".into(), 29),
+            ("Alt_L".into(), 56),
+            ("KEY_AB".into(), 999),
+        ]
+    }
+
+    fn make_key(code: u16, name: &str) -> KeyInfoResponse {
+        KeyInfoResponse {
+            code,
+            name: name.into(),
+        }
+    }
+
+    fn make_matrix(num_keys: usize) -> KeyMatrixState {
+        let keys: Vec<KeyInfoResponse> = (0..num_keys)
+            .map(|i| make_key(i as u16, &format!("KEY_{}", i)))
+            .collect();
+        KeyMatrixState {
+            keys,
+            mapped_codes: Vec::new(),
+            selected: 0,
+            pressed_codes: Vec::new(),
+        }
+    }
+
+    fn press(code: KeyCode) -> KeyEvent {
+        KeyEvent {
+            code,
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        }
+    }
+
+    fn make_app() -> App {
+        let mut app = App::new(test_symbols());
+        app.devices = vec![DeviceInfoResponse {
+            name: "Test Device".into(),
+            key: "/dev/input/event0".into(),
+            vendor: 1,
+            product: 2,
+        }];
+        app.presets = vec!["default".into(), "gaming".into()];
+        app
+    }
+
+    // --- filter_symbols tests ---
+
+    #[test]
+    fn filter_symbols_empty_query_returns_all() {
+        let syms = test_symbols();
+        let result = filter_symbols(&syms, "");
+        assert_eq!(result.len(), syms.len());
+    }
+
+    #[test]
+    fn filter_symbols_exact_match() {
+        let syms = test_symbols();
+        let result = filter_symbols(&syms, "KEY_A");
+        // Should match KEY_A and KEY_AB
+        assert!(result.iter().any(|(n, _)| n == "KEY_A"));
+        assert!(result.iter().any(|(n, _)| n == "KEY_AB"));
+        assert!(!result.iter().any(|(n, _)| n == "KEY_B"));
+    }
+
+    #[test]
+    fn filter_symbols_case_insensitive() {
+        let syms = test_symbols();
+        let result = filter_symbols(&syms, "key_b");
+        assert!(result.iter().any(|(n, _)| n == "KEY_B"));
+        assert!(result.iter().any(|(n, _)| n == "KEY_BACKSPACE"));
+    }
+
+    #[test]
+    fn filter_symbols_prefix_first() {
+        let syms = test_symbols();
+        let result = filter_symbols(&syms, "key_a");
+        // KEY_A and KEY_AB are prefix matches, should come before KEY_BACKSPACE (substring match for "a")
+        assert_eq!(result[0].0, "KEY_A");
+        assert_eq!(result[1].0, "KEY_AB");
+    }
+
+    #[test]
+    fn filter_symbols_no_match() {
+        let syms = test_symbols();
+        let result = filter_symbols(&syms, "zzz_nothing");
+        assert!(result.is_empty());
+    }
+
+    // --- KeyMatrixState tests ---
+
+    #[test]
+    fn matrix_key_state_available() {
+        let matrix = make_matrix(5);
+        // index 1 is not selected (0 is), not mapped, not pressed
+        assert_eq!(matrix.key_state(1), KeyState::Available);
+    }
+
+    #[test]
+    fn matrix_key_state_selected() {
+        let matrix = make_matrix(5);
+        assert_eq!(matrix.key_state(0), KeyState::Selected);
+    }
+
+    #[test]
+    fn matrix_key_state_mapped() {
+        let mut matrix = make_matrix(5);
+        matrix.mapped_codes.push(2); // code for index 2
+        assert_eq!(matrix.key_state(2), KeyState::Mapped);
+    }
+
+    #[test]
+    fn matrix_key_state_pressed_overrides_mapped() {
+        let mut matrix = make_matrix(5);
+        matrix.mapped_codes.push(2);
+        matrix.pressed_codes.push(2);
+        assert_eq!(matrix.key_state(2), KeyState::Pressed);
+    }
+
+    #[test]
+    fn matrix_key_state_pressed_overrides_selected() {
+        let mut matrix = make_matrix(5);
+        matrix.pressed_codes.push(0); // code for selected index 0
+        assert_eq!(matrix.key_state(0), KeyState::Pressed);
+    }
+
+    #[test]
+    fn matrix_move_right_and_left() {
+        let mut matrix = make_matrix(5);
+        assert_eq!(matrix.selected, 0);
+        matrix.move_right();
+        assert_eq!(matrix.selected, 1);
+        matrix.move_right();
+        assert_eq!(matrix.selected, 2);
+        matrix.move_left();
+        assert_eq!(matrix.selected, 1);
+    }
+
+    #[test]
+    fn matrix_move_left_at_zero_stays() {
+        let mut matrix = make_matrix(5);
+        matrix.move_left();
+        assert_eq!(matrix.selected, 0);
+    }
+
+    #[test]
+    fn matrix_move_right_at_end_stays() {
+        let mut matrix = make_matrix(5);
+        matrix.selected = 4;
+        matrix.move_right();
+        assert_eq!(matrix.selected, 4);
+    }
+
+    #[test]
+    fn matrix_move_up_down_grid() {
+        let mut matrix = make_matrix(20); // 20 keys, 5 cols -> 4 rows
+        let cols = 5;
+        matrix.selected = 7; // row 1, col 2
+        matrix.move_up(cols);
+        assert_eq!(matrix.selected, 2); // row 0, col 2
+        matrix.move_down(cols);
+        assert_eq!(matrix.selected, 7); // back to row 1, col 2
+    }
+
+    #[test]
+    fn matrix_move_up_at_top_stays() {
+        let mut matrix = make_matrix(20);
+        matrix.selected = 2; // top row
+        matrix.move_up(5);
+        assert_eq!(matrix.selected, 2);
+    }
+
+    #[test]
+    fn matrix_move_down_at_bottom_stays() {
+        let mut matrix = make_matrix(20);
+        matrix.selected = 17; // last row
+        matrix.move_down(5);
+        assert_eq!(matrix.selected, 17);
+    }
+
+    #[test]
+    fn matrix_selected_key() {
+        let matrix = make_matrix(5);
+        let key = matrix.selected_key().unwrap();
+        assert_eq!(key.code, 0);
+        assert_eq!(key.name, "KEY_0");
+    }
+
+    #[test]
+    fn matrix_selected_key_empty() {
+        let matrix = make_matrix(0);
+        assert!(matrix.selected_key().is_none());
+    }
+
+    // --- App handle_record_event tests ---
+
+    #[test]
+    fn record_event_tracks_pressed_codes() {
+        let mut app = make_app();
+        app.key_matrix = Some(make_matrix(10));
+        app.overlay = Overlay::Record {
+            events: Vec::new(),
+            selected: 0,
+        };
+
+        // Key press (type=1, value=1)
+        app.handle_record_event(RecordEvent {
+            event_type: 1,
+            code: 5,
+            value: 1,
+            code_name: "KEY_5".into(),
+        });
+        assert!(app.key_matrix.as_ref().unwrap().pressed_codes.contains(&5));
+
+        // Key release (type=1, value=0)
+        app.handle_record_event(RecordEvent {
+            event_type: 1,
+            code: 5,
+            value: 0,
+            code_name: "KEY_5".into(),
+        });
+        assert!(!app.key_matrix.as_ref().unwrap().pressed_codes.contains(&5));
+    }
+
+    #[test]
+    fn record_event_captures_press_deduplicates() {
+        let mut app = make_app();
+        app.overlay = Overlay::Record {
+            events: Vec::new(),
+            selected: 0,
+        };
+
+        let ev = RecordEvent {
+            event_type: 1,
+            code: 30,
+            value: 1,
+            code_name: "KEY_A".into(),
+        };
+        app.handle_record_event(ev.clone());
+        app.handle_record_event(ev);
+
+        if let Overlay::Record { events, .. } = &app.overlay {
+            assert_eq!(events.len(), 1); // deduplicated
+        } else {
+            panic!("Expected Record overlay");
+        }
+    }
+
+    #[test]
+    fn record_event_ignores_release_in_overlay() {
+        let mut app = make_app();
+        app.overlay = Overlay::Record {
+            events: Vec::new(),
+            selected: 0,
+        };
+
+        // Release event should not be captured
+        app.handle_record_event(RecordEvent {
+            event_type: 1,
+            code: 30,
+            value: 0,
+            code_name: "KEY_A".into(),
+        });
+
+        if let Overlay::Record { events, .. } = &app.overlay {
+            assert!(events.is_empty());
+        } else {
+            panic!("Expected Record overlay");
+        }
+    }
+
+    // --- App confirm/delete action tests ---
+
+    #[test]
+    fn confirm_delete_mapping_removes_entry() {
+        let mut app = make_app();
+        app.entries = vec![
+            MappingEntry {
+                input_combination: vec![InputConfig {
+                    event_type: 1,
+                    code: 30,
+                    origin_hash: None,
+                }],
+                target_uinput: "keyboard".into(),
+                output_symbol: Some("KEY_B".into()),
+                name: Some("KEY_A".into()),
+                mapping_type: "key_macro".into(),
+            },
+            MappingEntry {
+                input_combination: vec![InputConfig {
+                    event_type: 1,
+                    code: 48,
+                    origin_hash: None,
+                }],
+                target_uinput: "keyboard".into(),
+                output_symbol: Some("KEY_C".into()),
+                name: Some("KEY_B".into()),
+                mapping_type: "key_macro".into(),
+            },
+        ];
+        app.selected_entry = 0;
+        app.handle_confirm(&ConfirmAction::DeleteMapping);
+        assert_eq!(app.entries.len(), 1);
+        assert_eq!(app.entries[0].name.as_deref(), Some("KEY_B"));
+        assert!(app.unsaved_changes);
+    }
+
+    #[test]
+    fn confirm_delete_last_mapping_adjusts_index() {
+        let mut app = make_app();
+        app.entries = vec![MappingEntry {
+            input_combination: vec![InputConfig {
+                event_type: 1,
+                code: 30,
+                origin_hash: None,
+            }],
+            target_uinput: "keyboard".into(),
+            output_symbol: None,
+            name: None,
+            mapping_type: "key_macro".into(),
+        }];
+        app.selected_entry = 0;
+        app.handle_confirm(&ConfirmAction::DeleteMapping);
+        assert!(app.entries.is_empty());
+        assert_eq!(app.selected_entry, 0);
+    }
+
+    #[test]
+    fn confirm_quit_sets_should_quit() {
+        let mut app = make_app();
+        app.handle_confirm(&ConfirmAction::Quit);
+        assert!(app.should_quit);
+    }
+
+    // --- Screen navigation tests ---
+
+    #[test]
+    fn screen_index_and_title() {
+        assert_eq!(Screen::Devices.index(), 0);
+        assert_eq!(Screen::Presets.index(), 1);
+        assert_eq!(Screen::Editor.index(), 2);
+        assert_eq!(Screen::Status.index(), 3);
+        assert_eq!(Screen::Devices.title(), "Devices");
+    }
+
+    #[test]
+    fn ctrl_c_quits() {
+        let mut app = make_app();
+        let (tx, _rx) = mpsc::channel();
+        let key = KeyEvent {
+            code: KeyCode::Char('c'),
+            modifiers: KeyModifiers::CONTROL,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        };
+        app.handle_key(key, &tx);
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn q_with_unsaved_changes_shows_confirm() {
+        let mut app = make_app();
+        app.unsaved_changes = true;
+        let (tx, _rx) = mpsc::channel();
+        app.handle_key(press(KeyCode::Char('q')), &tx);
+        assert!(!app.should_quit);
+        assert!(matches!(
+            app.overlay,
+            Overlay::Confirm { action: ConfirmAction::Quit, .. }
+        ));
+    }
+
+    #[test]
+    fn q_without_unsaved_changes_quits() {
+        let mut app = make_app();
+        let (tx, _rx) = mpsc::channel();
+        app.handle_key(press(KeyCode::Char('q')), &tx);
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn number_keys_switch_screen() {
+        let mut app = make_app();
+        let (tx, _rx) = mpsc::channel();
+        // These will fail to refresh (no daemon) but screen should still change
+        app.handle_key(press(KeyCode::Char('4')), &tx);
+        assert_eq!(app.screen, Screen::Status);
+        app.handle_key(press(KeyCode::Char('1')), &tx);
+        assert_eq!(app.screen, Screen::Devices);
+    }
+
+    // --- Editor key matrix integration ---
+
+    #[test]
+    fn editor_enter_on_matrix_creates_entry_and_opens_symbol_search() {
+        let mut app = make_app();
+        app.screen = Screen::Editor;
+        app.key_matrix = Some(make_matrix(5));
+        let (tx, _rx) = mpsc::channel();
+
+        app.handle_key(press(KeyCode::Enter), &tx);
+
+        // Should have created an entry
+        assert_eq!(app.entries.len(), 1);
+        assert_eq!(app.entries[0].input_combination[0].code, 0);
+        assert!(app.unsaved_changes);
+        // Should have opened symbol search
+        assert!(matches!(app.overlay, Overlay::SymbolSearch { .. }));
+    }
+
+    #[test]
+    fn editor_delete_removes_mapping_for_selected_key() {
+        let mut app = make_app();
+        app.screen = Screen::Editor;
+        app.key_matrix = Some(make_matrix(5));
+        app.entries = vec![MappingEntry {
+            input_combination: vec![InputConfig {
+                event_type: 1,
+                code: 0, // matches key 0 in matrix
+                origin_hash: None,
+            }],
+            target_uinput: "keyboard".into(),
+            output_symbol: Some("KEY_B".into()),
+            name: Some("KEY_0".into()),
+            mapping_type: "key_macro".into(),
+        }];
+        let (tx, _rx) = mpsc::channel();
+
+        app.handle_key(press(KeyCode::Char('d')), &tx);
+        assert!(app.entries.is_empty());
+        assert!(app.unsaved_changes);
+    }
+
+    // --- sync_matrix_mapped_codes ---
+
+    #[test]
+    fn sync_matrix_mapped_codes_updates_from_entries() {
+        let mut app = make_app();
+        app.key_matrix = Some(make_matrix(5));
+        app.entries = vec![MappingEntry {
+            input_combination: vec![InputConfig {
+                event_type: 1,
+                code: 2,
+                origin_hash: None,
+            }],
+            target_uinput: "keyboard".into(),
+            output_symbol: None,
+            name: None,
+            mapping_type: "key_macro".into(),
+        }];
+        app.sync_matrix_mapped_codes();
+        assert_eq!(app.key_matrix.as_ref().unwrap().mapped_codes, vec![2]);
+    }
+
+    // --- Symbol search overlay ---
+
+    #[test]
+    fn open_symbol_search_sets_overlay() {
+        let mut app = make_app();
+        app.open_symbol_search();
+        if let Overlay::SymbolSearch { query, filtered, cursor, combination } = &app.overlay {
+            assert!(query.is_empty());
+            assert_eq!(*cursor, 0);
+            assert!(combination.is_empty());
+            assert_eq!(filtered.len(), app.symbols.len());
+        } else {
+            panic!("Expected SymbolSearch overlay");
+        }
+    }
+
+    #[test]
+    fn refilter_symbols_updates_filtered() {
+        let mut app = make_app();
+        app.open_symbol_search();
+        // Simulate typing "enter"
+        if let Overlay::SymbolSearch { query, .. } = &mut app.overlay {
+            query.push_str("enter");
+        }
+        app.refilter_symbols();
+        if let Overlay::SymbolSearch { filtered, cursor, .. } = &app.overlay {
+            assert_eq!(filtered.len(), 1);
+            assert_eq!(filtered[0].0, "KEY_ENTER");
+            assert_eq!(*cursor, 0); // reset
+        } else {
+            panic!("Expected SymbolSearch overlay");
+        }
+    }
+}
