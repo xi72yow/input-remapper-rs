@@ -23,9 +23,10 @@ pub fn run_tui() -> std::io::Result<()> {
     let symbols = load_all_symbols();
 
     let mut app = App::new(symbols);
-    app.refresh_devices();
-
     let events = EventHandler::new(Duration::from_millis(250));
+    let tx = events.sender();
+
+    app.refresh_devices(&tx);
 
     while !app.should_quit {
         terminal.draw(|frame| ui::render(frame, &app))?;
@@ -34,14 +35,17 @@ pub fn run_tui() -> std::io::Result<()> {
             Ok(AppEvent::Key(key)) => {
                 // Only handle key press events (ignore release/repeat)
                 if key.kind == crossterm::event::KeyEventKind::Press {
-                    app.handle_key(key, &events.sender());
+                    app.handle_key(key, &tx);
                 }
             }
+            Ok(AppEvent::IpcResult(op, result)) => app.handle_ipc_result(op, result, &tx),
             Ok(AppEvent::RecordEvent(ev)) => app.handle_record_event(ev),
             Ok(AppEvent::RecordError(msg)) => app.handle_record_error(msg),
             Ok(AppEvent::RecordStopped) => app.handle_record_stopped(),
             Ok(AppEvent::Resize(_, _)) => {} // ratatui handles resize
-            Ok(AppEvent::Tick) => {}
+            Ok(AppEvent::Tick) => {
+                app.tick = app.tick.wrapping_add(1);
+            }
             Err(_) => break,
         }
     }

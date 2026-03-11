@@ -35,8 +35,21 @@ impl IpcServer {
                 Ok(stream) => {
                     let manager = Arc::clone(&self.manager);
                     std::thread::spawn(move || {
-                        if let Err(e) = handle_connection(stream, &manager) {
-                            eprintln!("Connection error: {}", e);
+                        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            handle_connection(stream, &manager)
+                        })) {
+                            Ok(Err(e)) => eprintln!("Connection error: {}", e),
+                            Err(panic) => {
+                                let msg = if let Some(s) = panic.downcast_ref::<&str>() {
+                                    s.to_string()
+                                } else if let Some(s) = panic.downcast_ref::<String>() {
+                                    s.clone()
+                                } else {
+                                    "unknown panic".into()
+                                };
+                                eprintln!("Connection PANIC: {}", msg);
+                            }
+                            Ok(Ok(())) => {}
                         }
                     });
                 }
@@ -84,9 +97,44 @@ fn handle_connection(
             return handle_record(&mut stream, device);
         }
 
-        let response = {
-            let mut mgr = manager.lock().unwrap();
-            mgr.handle_request(request)
+        // Device discovery doesn't need the manager lock — handle outside
+        // to avoid blocking the daemon if evdev enumeration is slow
+        let response = match request {
+            Request::ListDevices => {
+                let devices = discover::discover_devices()
+                    .into_iter()
+                    .map(|d| super::protocol::DeviceInfoResponse {
+                        name: d.name,
+                        key: d.key,
+                        vendor: d.vendor,
+                        product: d.product,
+                    })
+                    .collect();
+                Response::Devices { devices }
+            }
+            Request::GetDeviceKeys { ref device } => {
+                match discover::find_device_by_name(device) {
+                    Some(dev_info) => {
+                        let keys = dev_info
+                            .supported_keys
+                            .into_iter()
+                            .map(|k| super::protocol::KeyInfoResponse {
+                                code: k.code,
+                                name: k.name,
+                            })
+                            .collect();
+                        let is_pointing = dev_info.is_pointing;
+                        Response::DeviceKeys { keys, is_pointing }
+                    }
+                    None => Response::Error {
+                        message: format!("Device '{}' not found", device),
+                    },
+                }
+            }
+            other => {
+                let mut mgr = manager.lock().unwrap();
+                mgr.handle_request(other)
+            }
         };
 
         send_response(&mut stream, &response)?;
@@ -108,32 +156,53 @@ fn handle_record(stream: &mut UnixStream, device_name: &str) -> std::io::Result<
         }
     };
 
-    // Open the first device path for recording (no grab — don't steal events)
-    let mut reader = DeviceReader::open(&dev_info.paths[0])?;
+    // Open all sub-device paths for recording (no grab — don't steal events)
+    let mut readers: Vec<DeviceReader> = Vec::new();
+    for path in &dev_info.paths {
+        match DeviceReader::open(path) {
+            Ok(r) => readers.push(r),
+            Err(e) => eprintln!("Warning: cannot open {:?}: {}", path, e),
+        }
+    }
 
-    eprintln!("Recording events from '{}'", dev_info.name);
+    if readers.is_empty() {
+        return send_response(
+            stream,
+            &Response::Error {
+                message: format!("Cannot open any device paths for '{}'", dev_info.name),
+            },
+        );
+    }
 
+    eprintln!(
+        "Recording events from '{}' ({} sub-devices)",
+        dev_info.name,
+        readers.len()
+    );
+
+    // Poll all sub-devices in a round-robin fashion
     loop {
-        match reader.read_events(1000) {
-            Ok(Some(events)) => {
-                for event in &events {
-                    let record = Response::RecordEvent(RecordEvent {
-                        event_type: event.event_type().0,
-                        code: event.code(),
-                        code_name: keycode_name(event.event_type().0, event.code()),
-                        value: event.value(),
-                    });
-                    // If write fails (client disconnected), stop recording
-                    if send_response(stream, &record).is_err() {
-                        eprintln!("Recording client disconnected");
-                        return Ok(());
+        for reader in &mut readers {
+            match reader.read_events(100) {
+                Ok(Some(events)) => {
+                    for event in &events {
+                        let record = Response::RecordEvent(RecordEvent {
+                            event_type: event.event_type().0,
+                            code: event.code(),
+                            code_name: keycode_name(event.event_type().0, event.code()),
+                            value: event.value(),
+                        });
+                        // If write fails (client disconnected), stop recording
+                        if send_response(stream, &record).is_err() {
+                            eprintln!("Recording client disconnected");
+                            return Ok(());
+                        }
                     }
                 }
-            }
-            Ok(None) => {} // timeout, no events
-            Err(e) => {
-                eprintln!("Record read error: {}", e);
-                return Err(e);
+                Ok(None) => {} // timeout, no events on this sub-device
+                Err(e) => {
+                    eprintln!("Record read error: {}", e);
+                }
             }
         }
     }

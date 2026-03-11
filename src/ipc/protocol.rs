@@ -83,5 +83,8 @@ pub enum Response {
     #[serde(rename = "record-event")]
     RecordEvent(RecordEvent),
     #[serde(rename = "device-keys")]
-    DeviceKeys { keys: Vec<KeyInfoResponse> },
+    DeviceKeys {
+        keys: Vec<KeyInfoResponse>,
+        is_pointing: bool,
+    },
 }

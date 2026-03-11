@@ -1,4 +1,4 @@
-use evdev::Device;
+use evdev::{Device, RelativeAxisCode};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -12,6 +12,8 @@ pub struct DeviceInfo {
     pub product: u16,
     /// All supported key/button codes across all sub-devices
     pub supported_keys: Vec<KeyInfo>,
+    /// True if any sub-device has REL_X + REL_Y (mouse/pointing device)
+    pub is_pointing: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -43,8 +45,14 @@ pub fn discover_devices() -> Vec<DeviceInfo> {
     let mut groups: HashMap<String, DeviceInfo> = HashMap::new();
 
     for (path, device) in evdev::enumerate() {
-        let key = device_group_key(&device);
         let name = device.name().unwrap_or("Unknown").to_string();
+
+        // Skip our own virtual devices
+        if name.starts_with("input-remapper") {
+            continue;
+        }
+
+        let key = device_group_key(&device);
 
         // Collect supported keys from this sub-device
         let mut sub_keys = Vec::new();
@@ -54,6 +62,11 @@ pub fn discover_devices() -> Vec<DeviceInfo> {
             }
         }
 
+        // Check if this sub-device is a pointing device (has REL_X + REL_Y)
+        let has_pointer = device.supported_relative_axes().is_some_and(|axes| {
+            axes.contains(RelativeAxisCode::REL_X) && axes.contains(RelativeAxisCode::REL_Y)
+        });
+
         groups
             .entry(key.clone())
             .and_modify(|info| {
@@ -61,6 +74,9 @@ pub fn discover_devices() -> Vec<DeviceInfo> {
                 // Use shortest name
                 if name.len() < info.name.len() {
                     info.name = name.clone();
+                }
+                if has_pointer {
+                    info.is_pointing = true;
                 }
                 // Merge supported keys (deduplicate)
                 for code in &sub_keys {
@@ -88,13 +104,13 @@ pub fn discover_devices() -> Vec<DeviceInfo> {
                     vendor: id.vendor(),
                     product: id.product(),
                     supported_keys,
+                    is_pointing: has_pointer,
                 }
             });
     }
 
     let mut devices: Vec<DeviceInfo> = groups.into_values().collect();
     devices.sort_by(|a, b| a.name.cmp(&b.name));
-    // Sort keys by code within each device
     for dev in &mut devices {
         dev.supported_keys.sort_by_key(|k| k.code);
     }

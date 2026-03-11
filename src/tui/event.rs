@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyEvent};
 
-use crate::ipc::protocol::RecordEvent;
+use crate::ipc::protocol::{RecordEvent, Response};
 
 pub enum AppEvent {
     Key(KeyEvent),
@@ -13,7 +13,24 @@ pub enum AppEvent {
     RecordEvent(RecordEvent),
     RecordError(String),
     RecordStopped,
+    /// Result of an async IPC request
+    IpcResult(IpcOp, Result<Response, String>),
     Tick,
+}
+
+/// Identifies which async IPC operation completed
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum IpcOp {
+    RefreshDevices,
+    RefreshPresets,
+    RefreshEntries,
+    RefreshStatus,
+    SavePreset,
+    ApplyPreset,
+    StopInjection,
+    StopAll,
+    CreatePreset,
+    DeletePreset,
 }
 
 pub struct EventHandler {

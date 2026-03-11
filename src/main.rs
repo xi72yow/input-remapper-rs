@@ -517,7 +517,7 @@ mod tests {
     fn discover_devices() {
         let _virt = VirtualDevice::builder()
             .unwrap()
-            .name("input-remapper-test-discover")
+            .name("test-discover-device")
             .with_keys(&{
                 let mut keys = AttributeSet::<KeyCode>::new();
                 keys.insert(KeyCode::KEY_A);
@@ -532,7 +532,7 @@ mod tests {
         for _ in 0..10 {
             std::thread::sleep(std::time::Duration::from_millis(100));
             let devices = crate::device::discover::discover_devices();
-            if devices.iter().any(|d| d.name.contains("input-remapper-test-discover")) {
+            if devices.iter().any(|d| d.name.contains("test-discover-device")) {
                 found = true;
                 break;
             }
@@ -938,19 +938,12 @@ mod tests {
 
     #[test]
     fn manager_list_devices() {
-        use crate::daemon::manager::DaemonManager;
-        use crate::ipc::protocol::{Request, Response};
+        use crate::device::discover::discover_devices;
 
-        let tmp = std::env::temp_dir().join("input-remapper-rs-test-listdev");
-        let _ = std::fs::remove_dir_all(&tmp);
-        std::fs::create_dir_all(&tmp).unwrap();
-
-        let mut manager = DaemonManager::new(tmp.clone(), false);
-
-        let resp = manager.handle_request(Request::ListDevices);
-        // Should return a Devices response (might be empty in test env without real devices)
-        assert!(matches!(resp, Response::Devices { .. }));
-
-        let _ = std::fs::remove_dir_all(&tmp);
+        // ListDevices is now handled by server.rs directly (outside manager mutex).
+        // Test that discover_devices() works without panicking.
+        let devices = discover_devices();
+        // In test/CI env there may be no devices, but it should not panic
+        let _ = devices; // should not panic; may be empty in CI
     }
 }

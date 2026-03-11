@@ -10,6 +10,7 @@ Rust rewrite of [input-remapper](https://github.com/sezanzeb/input-remapper), fo
 - Multi-device support with simultaneous polling
 - Daemon mode with Unix socket IPC
 - Systemd service with autoload
+- Terminal UI (TUI) for interactive configuration
 - ~1.4MB static binary, microsecond-level latency
 
 ## Usage
@@ -116,14 +117,40 @@ Config goes in `/etc/input-remapper-rs/`:
 
 Use `input-remapper-rs record --device "USB Gaming Mouse"` to find the correct `type`/`code` values for your buttons. The `origin_hash` is the device hash shown in `list-devices --json`.
 
-## Build
+## TUI
+
+Interactive terminal UI for configuring devices and presets:
 
 ```bash
-# Dev environment (Docker)
+sudo input-remapper-rs tui
+```
+
+- Browse and select input devices
+- Create, edit, and delete presets
+- Record input events to capture key/button codes
+- Search and assign output symbols (keysyms)
+- Apply presets and monitor injection status
+- Requires root (needs access to evdev devices and daemon socket)
+
+## Development
+
+```bash
+# Build
+docker compose run --rm dev cargo build
+
+# Build release
 docker compose run --rm dev cargo build --release
+
+# Run tests (needs /dev/uinput, runs as root in container)
 docker compose run --rm dev cargo test
 
-# Build .deb
+# Quick dev install (after build)
+docker compose run --rm dev cp /app/target/debug/input-remapper-rs /app/dist/
+sudo systemctl stop input-remapper-rs
+sudo cp dist/input-remapper-rs /usr/bin/
+sudo systemctl start input-remapper-rs
+
+# Build .deb package
 docker compose run --rm dev cargo deb
 ```
 

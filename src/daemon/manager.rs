@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::thread::JoinHandle;
 
 use crate::device::discover;
-use crate::ipc::protocol::{DeviceInfoResponse, InjectionStatus, KeyInfoResponse, Request, Response};
+use crate::ipc::protocol::{InjectionStatus, Request, Response};
 use crate::mapping::config;
 
 struct RunningInjection {
@@ -54,7 +54,6 @@ impl DaemonManager {
             Request::StopAll => self.stop_all(),
             Request::Status => self.status(),
             Request::Autoload => self.autoload(),
-            Request::ListDevices => self.list_devices(),
             Request::ListPresets { device } => self.list_presets(&device),
             Request::GetPreset { device, preset } => self.get_preset(&device, &preset),
             Request::SavePreset {
@@ -63,11 +62,12 @@ impl DaemonManager {
                 entries,
             } => self.save_preset(&device, &preset, &entries),
             Request::DeletePreset { device, preset } => self.delete_preset(&device, &preset),
-            Request::GetDeviceKeys { device } => self.get_device_keys(&device),
-            // Record is handled by the server directly (streaming)
-            Request::Record { .. } => Response::Error {
-                message: "Record should be handled by server".into(),
-            },
+            // ListDevices, GetDeviceKeys and Record are handled by the server directly
+            Request::ListDevices | Request::GetDeviceKeys { .. } | Request::Record { .. } => {
+                Response::Error {
+                    message: "Should be handled by server".into(),
+                }
+            }
         }
     }
 
@@ -205,40 +205,6 @@ impl DaemonManager {
             })
             .collect();
         Response::Status { injections }
-    }
-
-    fn list_devices(&self) -> Response {
-        let devices = discover::discover_devices();
-        let devices = devices
-            .into_iter()
-            .map(|d| DeviceInfoResponse {
-                name: d.name,
-                key: d.key,
-                vendor: d.vendor,
-                product: d.product,
-            })
-            .collect();
-        Response::Devices { devices }
-    }
-
-    fn get_device_keys(&self, device_name: &str) -> Response {
-        let dev_info = match discover::find_device_by_name(device_name) {
-            Some(info) => info,
-            None => {
-                return Response::Error {
-                    message: format!("Device '{}' not found", device_name),
-                }
-            }
-        };
-        let keys = dev_info
-            .supported_keys
-            .into_iter()
-            .map(|k| KeyInfoResponse {
-                code: k.code,
-                name: k.name,
-            })
-            .collect();
-        Response::DeviceKeys { keys }
     }
 
     fn list_presets(&self, device_name: &str) -> Response {
