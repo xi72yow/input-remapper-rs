@@ -66,11 +66,47 @@ enum Commands {
         #[arg(long)]
         preset: String,
     },
-    /// Record events from a device (for mapping in GUI)
+    /// Record events from a device (via daemon, streams JSON)
     Record {
         /// Device name or key
         #[arg(long)]
         device: String,
+    },
+    /// List presets for a device (via daemon)
+    ListPresets {
+        /// Device name
+        #[arg(long)]
+        device: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Get a preset's mappings (via daemon)
+    GetPreset {
+        /// Device name
+        #[arg(long)]
+        device: String,
+        /// Preset name
+        #[arg(long)]
+        preset: String,
+    },
+    /// Save a preset (via daemon, reads JSON from stdin)
+    SavePreset {
+        /// Device name
+        #[arg(long)]
+        device: String,
+        /// Preset name
+        #[arg(long)]
+        preset: String,
+    },
+    /// Delete a preset (via daemon)
+    DeletePreset {
+        /// Device name
+        #[arg(long)]
+        device: String,
+        /// Preset name
+        #[arg(long)]
+        preset: String,
     },
 }
 
@@ -240,37 +276,94 @@ fn main() {
             }
         }
         Commands::Record { device } => {
-            let dev_info = device::discover::find_device_by_name(&device)
-                .unwrap_or_else(|| {
-                    eprintln!("Device '{}' not found", device);
-                    std::process::exit(1);
-                });
-
-            println!("Recording events from '{}'. Press Ctrl+C to stop.", dev_info.name);
-
-            let mut reader = device::reader::DeviceReader::open(&dev_info.paths[0])
-                .unwrap_or_else(|e| {
-                    eprintln!("Failed to open device: {}", e);
-                    std::process::exit(1);
-                });
-
-            loop {
-                match reader.read_events(1000) {
-                    Ok(Some(events)) => {
-                        for event in &events {
-                            println!(
-                                "{{ \"type\": {}, \"code\": {}, \"value\": {} }}",
-                                event.event_type().0,
-                                event.code(),
-                                event.value()
-                            );
+            eprintln!("Recording events from '{}'. Press Ctrl+C to stop.", device);
+            if let Err(e) = ipc::client::record_events(&device, |response| {
+                match response {
+                    ipc::protocol::Response::RecordEvent(event) => {
+                        println!(
+                            "{}",
+                            serde_json::to_string(event).unwrap()
+                        );
+                        true
+                    }
+                    ipc::protocol::Response::Error { message } => {
+                        eprintln!("Error: {}", message);
+                        false
+                    }
+                    _ => true,
+                }
+            }) {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
+        }
+        Commands::ListPresets { device, json } => {
+            let request = ipc::protocol::Request::ListPresets { device };
+            match ipc::client::send_request(&request) {
+                Ok(ipc::protocol::Response::Presets { presets }) => {
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&presets).unwrap());
+                    } else if presets.is_empty() {
+                        println!("No presets found.");
+                    } else {
+                        for preset in &presets {
+                            println!("{}", preset);
                         }
                     }
-                    Ok(None) => {}
-                    Err(e) => {
-                        eprintln!("Error: {}", e);
-                        break;
-                    }
+                }
+                Ok(response) => print_response(&response),
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        Commands::GetPreset { device, preset } => {
+            let request = ipc::protocol::Request::GetPreset { device, preset };
+            match ipc::client::send_request(&request) {
+                Ok(ipc::protocol::Response::PresetData { entries }) => {
+                    println!("{}", serde_json::to_string_pretty(&entries).unwrap());
+                }
+                Ok(response) => print_response(&response),
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        Commands::SavePreset { device, preset } => {
+            // Read mapping entries from stdin as JSON
+            let mut input = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut input)
+                .unwrap_or_else(|e| {
+                    eprintln!("Failed to read stdin: {}", e);
+                    std::process::exit(1);
+                });
+            let entries: Vec<config::MappingEntry> =
+                serde_json::from_str(&input).unwrap_or_else(|e| {
+                    eprintln!("Invalid JSON: {}", e);
+                    std::process::exit(1);
+                });
+            let request = ipc::protocol::Request::SavePreset {
+                device,
+                preset,
+                entries,
+            };
+            match ipc::client::send_request(&request) {
+                Ok(response) => print_response(&response),
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        Commands::DeletePreset { device, preset } => {
+            let request = ipc::protocol::Request::DeletePreset { device, preset };
+            match ipc::client::send_request(&request) {
+                Ok(response) => print_response(&response),
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
                 }
             }
         }
@@ -288,6 +381,9 @@ fn print_response(response: &ipc::protocol::Response) {
             for inj in injections {
                 println!("{} -> {}", inj.device, inj.preset);
             }
+        }
+        other => {
+            println!("{}", serde_json::to_string_pretty(other).unwrap());
         }
     }
 }
@@ -692,5 +788,148 @@ mod tests {
         handler.remap_into(&repeat, &mut result);
 
         assert!(result.is_empty(), "Repeat should produce no events for combinations");
+    }
+
+    #[test]
+    fn ipc_protocol_serialization() {
+        use crate::ipc::protocol::{Request, Response, RecordEvent, DeviceInfoResponse};
+
+        // Test new request types serialize/deserialize correctly
+        let req = Request::ListDevices;
+        let json = serde_json::to_string(&req).unwrap();
+        let parsed: Request = serde_json::from_str(&json).unwrap();
+        assert!(matches!(parsed, Request::ListDevices));
+
+        let req = Request::ListPresets { device: "test".into() };
+        let json = serde_json::to_string(&req).unwrap();
+        let parsed: Request = serde_json::from_str(&json).unwrap();
+        assert!(matches!(parsed, Request::ListPresets { device } if device == "test"));
+
+        let req = Request::GetPreset { device: "dev".into(), preset: "p".into() };
+        let json = serde_json::to_string(&req).unwrap();
+        let parsed: Request = serde_json::from_str(&json).unwrap();
+        assert!(matches!(parsed, Request::GetPreset { device, preset } if device == "dev" && preset == "p"));
+
+        let req = Request::DeletePreset { device: "dev".into(), preset: "p".into() };
+        let json = serde_json::to_string(&req).unwrap();
+        let parsed: Request = serde_json::from_str(&json).unwrap();
+        assert!(matches!(parsed, Request::DeletePreset { .. }));
+
+        let req = Request::Record { device: "mouse".into() };
+        let json = serde_json::to_string(&req).unwrap();
+        let parsed: Request = serde_json::from_str(&json).unwrap();
+        assert!(matches!(parsed, Request::Record { device } if device == "mouse"));
+
+        // Test new response types
+        let resp = Response::Devices { devices: vec![DeviceInfoResponse {
+            name: "Test".into(), key: "k".into(), vendor: 1, product: 2,
+        }]};
+        let json = serde_json::to_string(&resp).unwrap();
+        let parsed: Response = serde_json::from_str(&json).unwrap();
+        assert!(matches!(parsed, Response::Devices { devices } if devices.len() == 1));
+
+        let resp = Response::Presets { presets: vec!["default".into()] };
+        let json = serde_json::to_string(&resp).unwrap();
+        let parsed: Response = serde_json::from_str(&json).unwrap();
+        assert!(matches!(parsed, Response::Presets { presets } if presets.len() == 1));
+
+        let resp = Response::RecordEvent(RecordEvent {
+            event_type: 1, code: 272, code_name: "BTN_LEFT".into(), value: 1,
+        });
+        let json = serde_json::to_string(&resp).unwrap();
+        let parsed: Response = serde_json::from_str(&json).unwrap();
+        assert!(matches!(parsed, Response::RecordEvent(_)));
+    }
+
+    #[test]
+    fn manager_preset_crud() {
+        use crate::daemon::manager::DaemonManager;
+        use crate::ipc::protocol::{Request, Response};
+
+        // Use a temp dir for config
+        let tmp = std::env::temp_dir().join("input-remapper-rs-test-crud");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let mut manager = DaemonManager::new(tmp.clone(), false);
+
+        // List presets for non-existent device → empty
+        let resp = manager.handle_request(Request::ListPresets { device: "TestDevice".into() });
+        assert!(matches!(resp, Response::Presets { presets } if presets.is_empty()));
+
+        // Save a preset
+        let entries = vec![config::MappingEntry {
+            input_combination: vec![config::InputConfig {
+                event_type: 1,
+                code: 2,
+                origin_hash: None,
+            }],
+            target_uinput: "keyboard".into(),
+            output_symbol: Some("a".into()),
+            name: None,
+            mapping_type: "key_macro".into(),
+        }];
+        let resp = manager.handle_request(Request::SavePreset {
+            device: "TestDevice".into(),
+            preset: "mypreset".into(),
+            entries: entries.clone(),
+        });
+        assert!(matches!(resp, Response::Ok { .. }));
+
+        // List presets → should have one
+        let resp = manager.handle_request(Request::ListPresets { device: "TestDevice".into() });
+        assert!(matches!(resp, Response::Presets { presets } if presets == vec!["mypreset"]));
+
+        // Get preset → should match
+        let resp = manager.handle_request(Request::GetPreset {
+            device: "TestDevice".into(),
+            preset: "mypreset".into(),
+        });
+        match resp {
+            Response::PresetData { entries: loaded } => {
+                assert_eq!(loaded.len(), 1);
+                assert_eq!(loaded[0].output_symbol, Some("a".into()));
+            }
+            _ => panic!("Expected PresetData"),
+        }
+
+        // Delete preset
+        let resp = manager.handle_request(Request::DeletePreset {
+            device: "TestDevice".into(),
+            preset: "mypreset".into(),
+        });
+        assert!(matches!(resp, Response::Ok { .. }));
+
+        // List presets → empty again
+        let resp = manager.handle_request(Request::ListPresets { device: "TestDevice".into() });
+        assert!(matches!(resp, Response::Presets { presets } if presets.is_empty()));
+
+        // Delete non-existent → error
+        let resp = manager.handle_request(Request::DeletePreset {
+            device: "TestDevice".into(),
+            preset: "nope".into(),
+        });
+        assert!(matches!(resp, Response::Error { .. }));
+
+        // Cleanup
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn manager_list_devices() {
+        use crate::daemon::manager::DaemonManager;
+        use crate::ipc::protocol::{Request, Response};
+
+        let tmp = std::env::temp_dir().join("input-remapper-rs-test-listdev");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let mut manager = DaemonManager::new(tmp.clone(), false);
+
+        let resp = manager.handle_request(Request::ListDevices);
+        // Should return a Devices response (might be empty in test env without real devices)
+        assert!(matches!(resp, Response::Devices { .. }));
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

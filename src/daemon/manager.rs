@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::thread::JoinHandle;
 
 use crate::device::discover;
-use crate::ipc::protocol::{InjectionStatus, Request, Response};
+use crate::ipc::protocol::{DeviceInfoResponse, InjectionStatus, Request, Response};
 use crate::mapping::config;
 
 struct RunningInjection {
@@ -54,6 +54,19 @@ impl DaemonManager {
             Request::StopAll => self.stop_all(),
             Request::Status => self.status(),
             Request::Autoload => self.autoload(),
+            Request::ListDevices => self.list_devices(),
+            Request::ListPresets { device } => self.list_presets(&device),
+            Request::GetPreset { device, preset } => self.get_preset(&device, &preset),
+            Request::SavePreset {
+                device,
+                preset,
+                entries,
+            } => self.save_preset(&device, &preset, &entries),
+            Request::DeletePreset { device, preset } => self.delete_preset(&device, &preset),
+            // Record is handled by the server directly (streaming)
+            Request::Record { .. } => Response::Error {
+                message: "Record should be handled by server".into(),
+            },
         }
     }
 
@@ -191,6 +204,112 @@ impl DaemonManager {
             })
             .collect();
         Response::Status { injections }
+    }
+
+    fn list_devices(&self) -> Response {
+        let devices = discover::discover_devices();
+        let devices = devices
+            .into_iter()
+            .map(|d| DeviceInfoResponse {
+                name: d.name,
+                key: d.key,
+                vendor: d.vendor,
+                product: d.product,
+            })
+            .collect();
+        Response::Devices { devices }
+    }
+
+    fn list_presets(&self, device_name: &str) -> Response {
+        let device_dir = self.config_dir.join(device_name);
+        if !device_dir.exists() {
+            return Response::Presets {
+                presets: Vec::new(),
+            };
+        }
+
+        let mut presets = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(&device_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().is_some_and(|e| e == "json") {
+                    if let Some(stem) = path.file_stem() {
+                        presets.push(stem.to_string_lossy().to_string());
+                    }
+                }
+            }
+        }
+        presets.sort();
+        Response::Presets { presets }
+    }
+
+    fn get_preset(&self, device_name: &str, preset_name: &str) -> Response {
+        let preset_path = self
+            .config_dir
+            .join(device_name)
+            .join(format!("{}.json", preset_name));
+
+        match config::load_preset(&preset_path) {
+            Ok(entries) => Response::PresetData { entries },
+            Err(e) => Response::Error {
+                message: format!("Failed to load preset: {}", e),
+            },
+        }
+    }
+
+    fn save_preset(
+        &self,
+        device_name: &str,
+        preset_name: &str,
+        entries: &[config::MappingEntry],
+    ) -> Response {
+        let device_dir = self.config_dir.join(device_name);
+        if let Err(e) = std::fs::create_dir_all(&device_dir) {
+            return Response::Error {
+                message: format!("Failed to create directory: {}", e),
+            };
+        }
+
+        let preset_path = device_dir.join(format!("{}.json", preset_name));
+        let json = match serde_json::to_string_pretty(entries) {
+            Ok(j) => j,
+            Err(e) => {
+                return Response::Error {
+                    message: format!("Failed to serialize preset: {}", e),
+                }
+            }
+        };
+
+        match std::fs::write(&preset_path, json) {
+            Ok(()) => Response::Ok {
+                message: format!("Saved preset '{}'", preset_name),
+            },
+            Err(e) => Response::Error {
+                message: format!("Failed to write preset: {}", e),
+            },
+        }
+    }
+
+    fn delete_preset(&self, device_name: &str, preset_name: &str) -> Response {
+        let preset_path = self
+            .config_dir
+            .join(device_name)
+            .join(format!("{}.json", preset_name));
+
+        if !preset_path.exists() {
+            return Response::Error {
+                message: format!("Preset '{}' not found", preset_name),
+            };
+        }
+
+        match std::fs::remove_file(&preset_path) {
+            Ok(()) => Response::Ok {
+                message: format!("Deleted preset '{}'", preset_name),
+            },
+            Err(e) => Response::Error {
+                message: format!("Failed to delete preset: {}", e),
+            },
+        }
     }
 
     fn autoload(&mut self) -> Response {
