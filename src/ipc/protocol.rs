@@ -31,6 +31,8 @@ pub enum Request {
     DeletePreset { device: String, preset: String },
     #[serde(rename = "record")]
     Record { device: String },
+    #[serde(rename = "get-device-keys")]
+    GetDeviceKeys { device: String },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -47,7 +49,13 @@ pub struct DeviceInfoResponse {
     pub product: u16,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KeyInfoResponse {
+    pub code: u16,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RecordEvent {
     pub event_type: u16,
     pub code: u16,
@@ -74,4 +82,6 @@ pub enum Response {
     },
     #[serde(rename = "record-event")]
     RecordEvent(RecordEvent),
+    #[serde(rename = "device-keys")]
+    DeviceKeys { keys: Vec<KeyInfoResponse> },
 }

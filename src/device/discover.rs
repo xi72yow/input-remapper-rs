@@ -10,6 +10,14 @@ pub struct DeviceInfo {
     pub key: String,
     pub vendor: u16,
     pub product: u16,
+    /// All supported key/button codes across all sub-devices
+    pub supported_keys: Vec<KeyInfo>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct KeyInfo {
+    pub code: u16,
+    pub name: String,
 }
 
 /// Generate a unique key for a physical device, used to group multiple
@@ -38,6 +46,14 @@ pub fn discover_devices() -> Vec<DeviceInfo> {
         let key = device_group_key(&device);
         let name = device.name().unwrap_or("Unknown").to_string();
 
+        // Collect supported keys from this sub-device
+        let mut sub_keys = Vec::new();
+        if let Some(keys) = device.supported_keys() {
+            for key_code in keys.iter() {
+                sub_keys.push(key_code.0);
+            }
+        }
+
         groups
             .entry(key.clone())
             .and_modify(|info| {
@@ -46,21 +62,42 @@ pub fn discover_devices() -> Vec<DeviceInfo> {
                 if name.len() < info.name.len() {
                     info.name = name.clone();
                 }
+                // Merge supported keys (deduplicate)
+                for code in &sub_keys {
+                    if !info.supported_keys.iter().any(|k| k.code == *code) {
+                        info.supported_keys.push(KeyInfo {
+                            code: *code,
+                            name: format!("{:?}", evdev::KeyCode(*code)),
+                        });
+                    }
+                }
             })
             .or_insert_with(|| {
                 let id = device.input_id();
+                let supported_keys = sub_keys
+                    .iter()
+                    .map(|&code| KeyInfo {
+                        code,
+                        name: format!("{:?}", evdev::KeyCode(code)),
+                    })
+                    .collect();
                 DeviceInfo {
                     name: name.clone(),
                     paths: vec![path.clone()],
                     key: key.clone(),
                     vendor: id.vendor(),
                     product: id.product(),
+                    supported_keys,
                 }
             });
     }
 
     let mut devices: Vec<DeviceInfo> = groups.into_values().collect();
     devices.sort_by(|a, b| a.name.cmp(&b.name));
+    // Sort keys by code within each device
+    for dev in &mut devices {
+        dev.supported_keys.sort_by_key(|k| k.code);
+    }
     devices
 }
 

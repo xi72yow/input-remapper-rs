@@ -2,6 +2,7 @@ mod daemon;
 mod device;
 mod ipc;
 mod mapping;
+mod tui;
 
 use clap::{Parser, Subcommand};
 use mapping::config;
@@ -108,6 +109,8 @@ enum Commands {
         #[arg(long)]
         preset: String,
     },
+    /// Interactive TUI for device configuration
+    Tui,
 }
 
 fn expand_tilde(path: &str) -> PathBuf {
@@ -365,6 +368,12 @@ fn main() {
                     eprintln!("Error: {}", e);
                     std::process::exit(1);
                 }
+            }
+        }
+        Commands::Tui => {
+            if let Err(e) = tui::run_tui() {
+                eprintln!("TUI error: {}", e);
+                std::process::exit(1);
             }
         }
     }

@@ -29,6 +29,34 @@ pub fn send_request(request: &Request) -> std::io::Result<Response> {
     Ok(response)
 }
 
+/// Start a record stream and return the raw stream + reader.
+/// The caller can cancel recording by calling `stream.shutdown(Shutdown::Both)`.
+pub fn start_record_stream(
+    device: &str,
+) -> std::io::Result<(UnixStream, BufReader<UnixStream>)> {
+    let mut stream = UnixStream::connect(SOCKET_PATH).map_err(|e| {
+        std::io::Error::new(
+            e.kind(),
+            format!(
+                "Could not connect to daemon at {}: {}. Is the daemon running?",
+                SOCKET_PATH, e
+            ),
+        )
+    })?;
+
+    let request = Request::Record {
+        device: device.to_string(),
+    };
+    let mut json = serde_json::to_string(&request)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    json.push('\n');
+    stream.write_all(json.as_bytes())?;
+    stream.flush()?;
+
+    let reader = BufReader::new(stream.try_clone()?);
+    Ok((stream, reader))
+}
+
 /// Send a record request and stream events via callback.
 /// Calls `on_event` for each event until the callback returns false or the connection drops.
 pub fn record_events<F>(device: &str, mut on_event: F) -> std::io::Result<()>
