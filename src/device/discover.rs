@@ -52,6 +52,11 @@ pub fn discover_devices() -> Vec<DeviceInfo> {
             continue;
         }
 
+        // Skip devices without any key/button capabilities (audio, video, etc.)
+        if device.supported_keys().is_none() {
+            continue;
+        }
+
         let key = device_group_key(&device);
 
         // Collect supported keys from this sub-device
