@@ -4,6 +4,8 @@ Remap input device events on kernel level (evdev/uinput). Works on Wayland and X
 
 Rust rewrite of [input-remapper](https://github.com/sezanzeb/input-remapper), focusing on performance and simplicity. Compatible with existing input-remapper preset files.
 
+<img width="1576" height="1066" alt="image" src="https://github.com/user-attachments/assets/78a50482-9e85-4baa-ab16-6cafa35e1031" />
+
 ## Features
 
 - Key-to-key and key-to-combination remapping (e.g. mouse button -> Ctrl+C)
