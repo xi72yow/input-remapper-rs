@@ -43,6 +43,7 @@ impl DeviceReader {
         Ok(self.device.fetch_events()?.collect())
     }
 
+    #[allow(dead_code)]
     pub fn name(&self) -> &str {
         self.device.name().unwrap_or("Unknown")
     }

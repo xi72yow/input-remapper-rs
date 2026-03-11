@@ -8,6 +8,7 @@ use crate::ipc::protocol::RecordEvent;
 
 pub enum AppEvent {
     Key(KeyEvent),
+    #[allow(dead_code)]
     Resize(u16, u16),
     RecordEvent(RecordEvent),
     RecordError(String),
