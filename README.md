@@ -87,6 +87,11 @@ Presets configured with autoload in `config.json` are automatically applied when
 }
 ```
 
+## Use Cases
+
+- **MMO mice** – Remap side buttons (e.g. Corsair Scimitar, UTechSmart) to keyboard shortcuts or macros
+- **Azeron keypads** – Map analog stick and keys to custom key combinations for gaming or productivity
+
 ## Development
 
 ```bash
