@@ -92,6 +92,18 @@ impl InjectionService {
                     }
                 }
 
+                // Check if any device fd has an error/hangup (device removed)
+                let device_error = pollfds.iter().take(readers.len()).any(|pfd| {
+                    pfd.revents().is_some_and(|r| {
+                        r.intersects(PollFlags::POLLHUP | PollFlags::POLLERR | PollFlags::POLLNVAL)
+                    })
+                });
+
+                if device_error {
+                    eprintln!("Device removed or error detected, stopping injection");
+                    break;
+                }
+
                 pollfds
                     .iter()
                     .enumerate()
