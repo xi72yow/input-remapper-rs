@@ -8,6 +8,24 @@ use crate::device::discover;
 use crate::ipc::protocol::{InjectionStatus, Request, Response};
 use crate::mapping::config;
 
+/// Validate that a device or preset name doesn't contain path traversal characters.
+fn validate_name(name: &str, label: &str) -> Result<(), Response> {
+    if name.is_empty()
+        || name.contains('/')
+        || name.contains('\\')
+        || name.contains('\0')
+        || name == "."
+        || name == ".."
+        || name.contains("..")
+    {
+        Err(Response::Error {
+            message: format!("Invalid {} name: '{}'", label, name),
+        })
+    } else {
+        Ok(())
+    }
+}
+
 struct RunningInjection {
     device_name: String,
     preset_name: String,
@@ -72,6 +90,9 @@ impl DaemonManager {
     }
 
     fn start_injection(&mut self, device_name: &str, preset_name: &str) -> Response {
+        if let Err(e) = validate_name(device_name, "device") { return e; }
+        if let Err(e) = validate_name(preset_name, "preset") { return e; }
+
         // Stop existing injection for this device
         if self.injections.contains_key(device_name) {
             self.stop_injection(device_name);
@@ -208,6 +229,7 @@ impl DaemonManager {
     }
 
     fn list_presets(&self, device_name: &str) -> Response {
+        if let Err(e) = validate_name(device_name, "device") { return e; }
         let device_dir = self.config_dir.join(device_name);
         if !device_dir.exists() {
             return Response::Presets {
@@ -231,6 +253,8 @@ impl DaemonManager {
     }
 
     fn get_preset(&self, device_name: &str, preset_name: &str) -> Response {
+        if let Err(e) = validate_name(device_name, "device") { return e; }
+        if let Err(e) = validate_name(preset_name, "preset") { return e; }
         let preset_path = self
             .config_dir
             .join(device_name)
@@ -250,6 +274,8 @@ impl DaemonManager {
         preset_name: &str,
         entries: &[config::MappingEntry],
     ) -> Response {
+        if let Err(e) = validate_name(device_name, "device") { return e; }
+        if let Err(e) = validate_name(preset_name, "preset") { return e; }
         let device_dir = self.config_dir.join(device_name);
         if let Err(e) = std::fs::create_dir_all(&device_dir) {
             return Response::Error {
@@ -278,6 +304,8 @@ impl DaemonManager {
     }
 
     fn delete_preset(&self, device_name: &str, preset_name: &str) -> Response {
+        if let Err(e) = validate_name(device_name, "device") { return e; }
+        if let Err(e) = validate_name(preset_name, "preset") { return e; }
         let preset_path = self
             .config_dir
             .join(device_name)

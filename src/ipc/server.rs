@@ -1,6 +1,9 @@
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::{Arc, Mutex};
+
+/// Maximum line length for IPC messages (1 MB)
+const MAX_LINE_LENGTH: u64 = 1024 * 1024;
 
 use super::protocol::{RecordEvent, Request, Response, SOCKET_PATH};
 use crate::daemon::manager::DaemonManager;
@@ -73,7 +76,7 @@ fn handle_connection(
     mut stream: UnixStream,
     manager: &Arc<Mutex<DaemonManager>>,
 ) -> std::io::Result<()> {
-    let reader = BufReader::new(stream.try_clone()?);
+    let reader = BufReader::new(stream.try_clone()?.take(MAX_LINE_LENGTH));
 
     for line in reader.lines() {
         let line = line?;

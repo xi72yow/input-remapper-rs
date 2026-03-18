@@ -149,7 +149,7 @@ fn main() {
             let mgr_clone = Arc::clone(&manager);
             ctrlc::set_handler(move || {
                 eprintln!("Shutting down daemon...");
-                let mut mgr = mgr_clone.lock().unwrap();
+                let mut mgr = mgr_clone.lock().unwrap_or_else(|e| e.into_inner());
                 mgr.handle_request(ipc::protocol::Request::StopAll);
                 std::process::exit(0);
             })
