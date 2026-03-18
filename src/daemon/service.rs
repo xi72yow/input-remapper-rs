@@ -52,10 +52,12 @@ impl InjectionService {
         Ok(writer)
     }
 
+    #[cfg(test)]
     pub fn has_stop_signal(&self) -> bool {
         self.stop_reader.is_some()
     }
 
+    #[cfg(test)]
     pub fn device_paths(&self) -> &[PathBuf] {
         &self.device_paths
     }
