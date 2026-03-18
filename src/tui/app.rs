@@ -842,7 +842,15 @@ impl App {
         }
         // Restart injection if it was running before recording
         if let Some((device, preset)) = self.record_prev_injection.take() {
-            let _ = client::send_request(&Request::Start { device, preset });
+            match client::send_request(&Request::Start { device, preset }) {
+                Ok(Response::Error { message }) => {
+                    self.error = Some(format!("Failed to restart injection: {}", message));
+                }
+                Err(e) => {
+                    self.error = Some(format!("Failed to restart injection: {}", e));
+                }
+                _ => {}
+            }
         }
     }
 

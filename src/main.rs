@@ -130,7 +130,13 @@ fn main() {
         Commands::ListDevices { json } => {
             let devices = device::discover::discover_devices();
             if json {
-                println!("{}", serde_json::to_string_pretty(&devices).unwrap());
+                match serde_json::to_string_pretty(&devices) {
+                    Ok(json) => println!("{}", json),
+                    Err(e) => {
+                        eprintln!("Failed to serialize: {}", e);
+                        std::process::exit(1);
+                    }
+                }
             } else {
                 for dev in &devices {
                     println!("{}", dev.name);
@@ -200,7 +206,13 @@ fn main() {
             match ipc::client::send_request(&request) {
                 Ok(ipc::protocol::Response::Status { injections }) => {
                     if json {
-                        println!("{}", serde_json::to_string_pretty(&injections).unwrap());
+                        match serde_json::to_string_pretty(&injections) {
+                            Ok(json) => println!("{}", json),
+                            Err(e) => {
+                                eprintln!("Failed to serialize: {}", e);
+                                std::process::exit(1);
+                            }
+                        }
                     } else if injections.is_empty() {
                         println!("No active injections.");
                     } else {
@@ -281,7 +293,7 @@ fn main() {
             let stop_writer = std::sync::Mutex::new(Some(stop_writer));
             ctrlc::set_handler(move || {
                 // Drop the writer to wake up the poll loop
-                let _ = stop_writer.lock().unwrap().take();
+                let _ = stop_writer.lock().unwrap_or_else(|e| e.into_inner()).take();
             })
             .expect("Failed to set signal handler");
 
@@ -297,7 +309,7 @@ fn main() {
                     ipc::protocol::Response::RecordEvent(event) => {
                         println!(
                             "{}",
-                            serde_json::to_string(event).unwrap()
+                            serde_json::to_string(event).unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e))
                         );
                         true
                     }
@@ -317,7 +329,13 @@ fn main() {
             match ipc::client::send_request(&request) {
                 Ok(ipc::protocol::Response::Presets { presets }) => {
                     if json {
-                        println!("{}", serde_json::to_string_pretty(&presets).unwrap());
+                        match serde_json::to_string_pretty(&presets) {
+                            Ok(json) => println!("{}", json),
+                            Err(e) => {
+                                eprintln!("Failed to serialize: {}", e);
+                                std::process::exit(1);
+                            }
+                        }
                     } else if presets.is_empty() {
                         println!("No presets found.");
                     } else {
@@ -337,7 +355,13 @@ fn main() {
             let request = ipc::protocol::Request::GetPreset { device, preset };
             match ipc::client::send_request(&request) {
                 Ok(ipc::protocol::Response::PresetData { entries }) => {
-                    println!("{}", serde_json::to_string_pretty(&entries).unwrap());
+                    match serde_json::to_string_pretty(&entries) {
+                        Ok(json) => println!("{}", json),
+                        Err(e) => {
+                            eprintln!("Failed to serialize: {}", e);
+                            std::process::exit(1);
+                        }
+                    }
                 }
                 Ok(response) => print_response(&response),
                 Err(e) => {
@@ -404,7 +428,13 @@ fn print_response(response: &ipc::protocol::Response) {
             }
         }
         other => {
-            println!("{}", serde_json::to_string_pretty(other).unwrap());
+            match serde_json::to_string_pretty(other) {
+                Ok(json) => println!("{}", json),
+                Err(e) => {
+                    eprintln!("Failed to serialize response: {}", e);
+                    std::process::exit(1);
+                }
+            }
         }
     }
 }

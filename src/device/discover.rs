@@ -122,9 +122,13 @@ pub fn discover_devices() -> Vec<DeviceInfo> {
     devices
 }
 
-/// Find a device group by name (partial match).
+/// Find a device group by name (exact match preferred, substring as fallback).
 pub fn find_device_by_name(name: &str) -> Option<DeviceInfo> {
-    discover_devices()
-        .into_iter()
-        .find(|d| d.name.contains(name))
+    let devices = discover_devices();
+    // Prefer exact match
+    if let Some(dev) = devices.iter().find(|d| d.name == name) {
+        return Some(dev.clone());
+    }
+    // Fall back to substring match
+    devices.into_iter().find(|d| d.name.contains(name))
 }

@@ -1,4 +1,4 @@
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::{Arc, Mutex};
 
@@ -76,11 +76,23 @@ fn handle_connection(
     mut stream: UnixStream,
     manager: &Arc<Mutex<DaemonManager>>,
 ) -> std::io::Result<()> {
-    let reader = BufReader::new(stream.try_clone()?.take(MAX_LINE_LENGTH));
+    let reader = BufReader::new(stream.try_clone()?);
 
     for line in reader.lines() {
         let line = line?;
         if line.is_empty() {
+            continue;
+        }
+
+        if line.len() as u64 > MAX_LINE_LENGTH {
+            let resp = Response::Error {
+                message: format!(
+                    "Message too large ({} bytes, max {} bytes)",
+                    line.len(),
+                    MAX_LINE_LENGTH
+                ),
+            };
+            send_response(&mut stream, &resp)?;
             continue;
         }
 
@@ -135,7 +147,7 @@ fn handle_connection(
                 }
             }
             other => {
-                let mut mgr = manager.lock().unwrap();
+                let mut mgr = manager.lock().unwrap_or_else(|e| e.into_inner());
                 mgr.handle_request(other)
             }
         };
