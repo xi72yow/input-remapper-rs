@@ -9,7 +9,7 @@ use crate::ipc::protocol::{InjectionStatus, Request, Response};
 use crate::mapping::config;
 
 /// Validate that a device or preset name doesn't contain path traversal characters.
-fn validate_name(name: &str, label: &str) -> Result<(), Response> {
+pub(crate) fn validate_name(name: &str, label: &str) -> Result<(), Response> {
     if name.is_empty()
         || name.contains('/')
         || name.contains('\\')
@@ -363,5 +363,411 @@ impl DaemonManager {
                 ),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ipc::protocol::{Request, Response};
+    use crate::mapping::config::MappingEntry;
+    use std::fs;
+    use tempfile::TempDir;
+
+    fn make_manager(tmp: &TempDir) -> DaemonManager {
+        DaemonManager::new(tmp.path().to_path_buf(), false)
+    }
+
+    fn sample_entry() -> MappingEntry {
+        MappingEntry {
+            input_combination: vec![crate::mapping::config::InputConfig {
+                event_type: 1,
+                code: 30,
+                origin_hash: None,
+            }],
+            target_uinput: "keyboard".to_string(),
+            output_symbol: Some("b".to_string()),
+            name: Some("test mapping".to_string()),
+            mapping_type: "key_macro".to_string(),
+        }
+    }
+
+    // ── validate_name ──────────────────────────────────────────
+
+    #[test]
+    fn validate_name_accepts_valid_names() {
+        assert!(validate_name("my-device", "device").is_ok());
+        assert!(validate_name("Logitech G Pro", "device").is_ok());
+        assert!(validate_name("preset_1", "preset").is_ok());
+    }
+
+    #[test]
+    fn validate_name_rejects_empty() {
+        assert!(validate_name("", "device").is_err());
+    }
+
+    #[test]
+    fn validate_name_rejects_slash() {
+        assert!(validate_name("foo/bar", "device").is_err());
+        assert!(validate_name("foo\\bar", "device").is_err());
+    }
+
+    #[test]
+    fn validate_name_rejects_dot_dot() {
+        assert!(validate_name("..", "device").is_err());
+        assert!(validate_name(".", "device").is_err());
+        assert!(validate_name("foo..bar", "device").is_err());
+    }
+
+    #[test]
+    fn validate_name_rejects_null_byte() {
+        assert!(validate_name("foo\0bar", "device").is_err());
+    }
+
+    // ── DaemonManager::status ──────────────────────────────────
+
+    #[test]
+    fn status_empty_returns_no_injections() {
+        let tmp = TempDir::new().unwrap();
+        let mut mgr = make_manager(&tmp);
+        match mgr.handle_request(Request::Status) {
+            Response::Status { injections } => assert!(injections.is_empty()),
+            other => panic!("Expected Status, got {:?}", other),
+        }
+    }
+
+    // ── DaemonManager::stop_injection ──────────────────────────
+
+    #[test]
+    fn stop_nonexistent_device_returns_error() {
+        let tmp = TempDir::new().unwrap();
+        let mut mgr = make_manager(&tmp);
+        match mgr.handle_request(Request::Stop {
+            device: "nonexistent".into(),
+        }) {
+            Response::Error { message } => {
+                assert!(message.contains("No injection running"));
+            }
+            other => panic!("Expected Error, got {:?}", other),
+        }
+    }
+
+    // ── DaemonManager::stop_all ────────────────────────────────
+
+    #[test]
+    fn stop_all_with_no_injections() {
+        let tmp = TempDir::new().unwrap();
+        let mut mgr = make_manager(&tmp);
+        match mgr.handle_request(Request::StopAll) {
+            Response::Ok { message } => {
+                assert!(message.contains("0 injection(s)"));
+            }
+            other => panic!("Expected Ok, got {:?}", other),
+        }
+    }
+
+    // ── DaemonManager::list_presets ────────────────────────────
+
+    #[test]
+    fn list_presets_empty_device_dir() {
+        let tmp = TempDir::new().unwrap();
+        let mut mgr = make_manager(&tmp);
+        match mgr.handle_request(Request::ListPresets {
+            device: "my-device".into(),
+        }) {
+            Response::Presets { presets } => assert!(presets.is_empty()),
+            other => panic!("Expected Presets, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn list_presets_finds_json_files() {
+        let tmp = TempDir::new().unwrap();
+        let device_dir = tmp.path().join("my-device");
+        fs::create_dir_all(&device_dir).unwrap();
+        fs::write(device_dir.join("alpha.json"), "[]").unwrap();
+        fs::write(device_dir.join("beta.json"), "[]").unwrap();
+        fs::write(device_dir.join("readme.txt"), "ignore me").unwrap();
+
+        let mut mgr = make_manager(&tmp);
+        match mgr.handle_request(Request::ListPresets {
+            device: "my-device".into(),
+        }) {
+            Response::Presets { presets } => {
+                assert_eq!(presets, vec!["alpha", "beta"]);
+            }
+            other => panic!("Expected Presets, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn list_presets_rejects_path_traversal() {
+        let tmp = TempDir::new().unwrap();
+        let mut mgr = make_manager(&tmp);
+        match mgr.handle_request(Request::ListPresets {
+            device: "../etc".into(),
+        }) {
+            Response::Error { message } => {
+                assert!(message.contains("Invalid"));
+            }
+            other => panic!("Expected Error, got {:?}", other),
+        }
+    }
+
+    // ── DaemonManager::save_preset ─────────────────────────────
+
+    #[test]
+    fn save_and_get_preset() {
+        let tmp = TempDir::new().unwrap();
+        let mut mgr = make_manager(&tmp);
+        let entries = vec![sample_entry()];
+
+        // Save
+        match mgr.handle_request(Request::SavePreset {
+            device: "dev1".into(),
+            preset: "my-preset".into(),
+            entries: entries.clone(),
+        }) {
+            Response::Ok { .. } => {}
+            other => panic!("Expected Ok, got {:?}", other),
+        }
+
+        // Verify file exists
+        assert!(tmp.path().join("dev1/my-preset.json").exists());
+
+        // Get it back
+        match mgr.handle_request(Request::GetPreset {
+            device: "dev1".into(),
+            preset: "my-preset".into(),
+        }) {
+            Response::PresetData {
+                entries: loaded_entries,
+            } => {
+                assert_eq!(loaded_entries.len(), 1);
+                assert_eq!(
+                    loaded_entries[0].output_symbol,
+                    Some("b".to_string())
+                );
+            }
+            other => panic!("Expected PresetData, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn save_preset_rejects_traversal() {
+        let tmp = TempDir::new().unwrap();
+        let mut mgr = make_manager(&tmp);
+        match mgr.handle_request(Request::SavePreset {
+            device: "dev1".into(),
+            preset: "../evil".into(),
+            entries: vec![],
+        }) {
+            Response::Error { message } => assert!(message.contains("Invalid")),
+            other => panic!("Expected Error, got {:?}", other),
+        }
+    }
+
+    // ── DaemonManager::get_preset ──────────────────────────────
+
+    #[test]
+    fn get_preset_not_found() {
+        let tmp = TempDir::new().unwrap();
+        let mut mgr = make_manager(&tmp);
+        match mgr.handle_request(Request::GetPreset {
+            device: "dev1".into(),
+            preset: "nonexistent".into(),
+        }) {
+            Response::Error { message } => {
+                assert!(message.contains("Failed to load preset"));
+            }
+            other => panic!("Expected Error, got {:?}", other),
+        }
+    }
+
+    // ── DaemonManager::delete_preset ───────────────────────────
+
+    #[test]
+    fn delete_preset_removes_file() {
+        let tmp = TempDir::new().unwrap();
+        let mut mgr = make_manager(&tmp);
+
+        // Create preset first
+        mgr.handle_request(Request::SavePreset {
+            device: "dev1".into(),
+            preset: "to-delete".into(),
+            entries: vec![sample_entry()],
+        });
+
+        let path = tmp.path().join("dev1/to-delete.json");
+        assert!(path.exists());
+
+        match mgr.handle_request(Request::DeletePreset {
+            device: "dev1".into(),
+            preset: "to-delete".into(),
+        }) {
+            Response::Ok { .. } => {}
+            other => panic!("Expected Ok, got {:?}", other),
+        }
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn delete_preset_not_found() {
+        let tmp = TempDir::new().unwrap();
+        let mut mgr = make_manager(&tmp);
+        match mgr.handle_request(Request::DeletePreset {
+            device: "dev1".into(),
+            preset: "nope".into(),
+        }) {
+            Response::Error { message } => assert!(message.contains("not found")),
+            other => panic!("Expected Error, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn delete_preset_rejects_traversal() {
+        let tmp = TempDir::new().unwrap();
+        let mut mgr = make_manager(&tmp);
+        match mgr.handle_request(Request::DeletePreset {
+            device: "..".into(),
+            preset: "evil".into(),
+        }) {
+            Response::Error { message } => assert!(message.contains("Invalid")),
+            other => panic!("Expected Error, got {:?}", other),
+        }
+    }
+
+    // ── DaemonManager::start_injection (device not found) ──────
+
+    #[test]
+    fn start_injection_device_not_found() {
+        let tmp = TempDir::new().unwrap();
+        let mut mgr = make_manager(&tmp);
+        match mgr.handle_request(Request::Start {
+            device: "nonexistent-device-xyz".into(),
+            preset: "my-preset".into(),
+        }) {
+            Response::Error { message } => {
+                assert!(message.contains("not found"));
+            }
+            other => panic!("Expected Error, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn start_injection_rejects_traversal_device() {
+        let tmp = TempDir::new().unwrap();
+        let mut mgr = make_manager(&tmp);
+        match mgr.handle_request(Request::Start {
+            device: "../etc".into(),
+            preset: "test".into(),
+        }) {
+            Response::Error { message } => assert!(message.contains("Invalid")),
+            other => panic!("Expected Error, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn start_injection_rejects_traversal_preset() {
+        let tmp = TempDir::new().unwrap();
+        let mut mgr = make_manager(&tmp);
+        match mgr.handle_request(Request::Start {
+            device: "dev1".into(),
+            preset: "../evil".into(),
+        }) {
+            Response::Error { message } => assert!(message.contains("Invalid")),
+            other => panic!("Expected Error, got {:?}", other),
+        }
+    }
+
+    // ── DaemonManager::autoload ────────────────────────────────
+
+    #[test]
+    fn autoload_no_config_returns_error() {
+        let tmp = TempDir::new().unwrap();
+        let mut mgr = make_manager(&tmp);
+        match mgr.handle_request(Request::Autoload) {
+            Response::Error { message } => {
+                assert!(message.contains("Failed to load config"));
+            }
+            other => panic!("Expected Error, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn autoload_empty_config() {
+        let tmp = TempDir::new().unwrap();
+        let config = r#"{"version":"1.0","autoload":{}}"#;
+        fs::write(tmp.path().join("config.json"), config).unwrap();
+
+        let mut mgr = make_manager(&tmp);
+        match mgr.handle_request(Request::Autoload) {
+            Response::Ok { message } => {
+                assert!(message.contains("0 device(s)"));
+            }
+            other => panic!("Expected Ok, got {:?}", other),
+        }
+    }
+
+    // ── DaemonManager::handle_request dispatches correctly ─────
+
+    #[test]
+    fn handle_request_server_only_requests_return_error() {
+        let tmp = TempDir::new().unwrap();
+        let mut mgr = make_manager(&tmp);
+
+        match mgr.handle_request(Request::ListDevices) {
+            Response::Error { message } => {
+                assert!(message.contains("handled by server"));
+            }
+            other => panic!("Expected Error, got {:?}", other),
+        }
+
+        match mgr.handle_request(Request::GetDeviceKeys {
+            device: "dev".into(),
+        }) {
+            Response::Error { message } => {
+                assert!(message.contains("handled by server"));
+            }
+            other => panic!("Expected Error, got {:?}", other),
+        }
+
+        match mgr.handle_request(Request::Record {
+            device: "dev".into(),
+        }) {
+            Response::Error { message } => {
+                assert!(message.contains("handled by server"));
+            }
+            other => panic!("Expected Error, got {:?}", other),
+        }
+    }
+
+    // ── DaemonManager::new with xmodmap ────────────────────────
+
+    #[test]
+    fn new_loads_xmodmap_when_present() {
+        let tmp = TempDir::new().unwrap();
+        let xmodmap = r#"{"Control_L": 29, "a": 30}"#;
+        fs::write(tmp.path().join("xmodmap.json"), xmodmap).unwrap();
+
+        let mgr = make_manager(&tmp);
+        assert_eq!(mgr.xmodmap.get("Control_L"), Some(&29));
+        assert_eq!(mgr.xmodmap.get("a"), Some(&30));
+    }
+
+    #[test]
+    fn new_handles_missing_xmodmap() {
+        let tmp = TempDir::new().unwrap();
+        let mgr = make_manager(&tmp);
+        assert!(mgr.xmodmap.is_empty());
+    }
+
+    #[test]
+    fn new_handles_invalid_xmodmap() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(tmp.path().join("xmodmap.json"), "not json").unwrap();
+
+        let mgr = make_manager(&tmp);
+        assert!(mgr.xmodmap.is_empty()); // falls back to default
     }
 }

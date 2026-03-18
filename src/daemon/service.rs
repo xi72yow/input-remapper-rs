@@ -52,6 +52,14 @@ impl InjectionService {
         Ok(writer)
     }
 
+    pub fn has_stop_signal(&self) -> bool {
+        self.stop_reader.is_some()
+    }
+
+    pub fn device_paths(&self) -> &[PathBuf] {
+        &self.device_paths
+    }
+
     pub fn run(&mut self) -> std::io::Result<()> {
         let mut readers: Vec<DeviceReader> = Vec::new();
         for path in &self.device_paths {
@@ -136,5 +144,138 @@ impl InjectionService {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mapping::config::{InputConfig, MappingEntry, SymbolMap};
+    use std::io::Write;
+
+    fn empty_xmodmap() -> SymbolMap {
+        SymbolMap::new()
+    }
+
+    fn sample_entries() -> Vec<MappingEntry> {
+        vec![MappingEntry {
+            input_combination: vec![InputConfig {
+                event_type: 1,
+                code: 30,
+                origin_hash: None,
+            }],
+            target_uinput: "keyboard".to_string(),
+            output_symbol: Some("b".to_string()),
+            name: Some("test".to_string()),
+            mapping_type: "key_macro".to_string(),
+        }]
+    }
+
+    #[test]
+    fn from_entries_creates_service() {
+        let service = InjectionService::from_entries(
+            vec![PathBuf::from("/dev/input/event0")],
+            &sample_entries(),
+            &empty_xmodmap(),
+            false,
+        );
+        assert_eq!(service.device_paths(), &[PathBuf::from("/dev/input/event0")]);
+        assert!(!service.has_stop_signal());
+    }
+
+    #[test]
+    fn from_entries_empty() {
+        let service = InjectionService::from_entries(
+            vec![],
+            &[],
+            &empty_xmodmap(),
+            false,
+        );
+        assert!(service.device_paths().is_empty());
+    }
+
+    #[test]
+    fn create_stop_signal_sets_reader() {
+        let mut service = InjectionService::from_entries(
+            vec![],
+            &[],
+            &empty_xmodmap(),
+            false,
+        );
+        assert!(!service.has_stop_signal());
+
+        let _writer = service.create_stop_signal().unwrap();
+        assert!(service.has_stop_signal());
+    }
+
+    #[test]
+    fn stop_signal_can_be_written_to() {
+        let mut service = InjectionService::from_entries(
+            vec![],
+            &[],
+            &empty_xmodmap(),
+            false,
+        );
+        let mut writer = service.create_stop_signal().unwrap();
+        // Writing should succeed (this is what signals stop)
+        writer.write_all(&[1]).unwrap();
+    }
+
+    #[test]
+    fn new_with_preset_file() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let preset_path = tmp.path().join("test.json");
+        std::fs::write(&preset_path, "[]").unwrap();
+
+        let service = InjectionService::new(
+            vec![PathBuf::from("/dev/input/event0")],
+            &preset_path,
+            &empty_xmodmap(),
+            false,
+        )
+        .unwrap();
+        assert_eq!(service.device_paths().len(), 1);
+    }
+
+    #[test]
+    fn new_with_missing_preset_file() {
+        let result = InjectionService::new(
+            vec![],
+            Path::new("/nonexistent/preset.json"),
+            &empty_xmodmap(),
+            false,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn new_with_invalid_preset_json() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let preset_path = tmp.path().join("bad.json");
+        std::fs::write(&preset_path, "not json").unwrap();
+
+        let result = InjectionService::new(
+            vec![],
+            &preset_path,
+            &empty_xmodmap(),
+            false,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn multiple_device_paths() {
+        let paths = vec![
+            PathBuf::from("/dev/input/event0"),
+            PathBuf::from("/dev/input/event1"),
+            PathBuf::from("/dev/input/event2"),
+        ];
+        let service = InjectionService::from_entries(
+            paths.clone(),
+            &[],
+            &empty_xmodmap(),
+            false,
+        );
+        assert_eq!(service.device_paths(), &paths);
     }
 }
