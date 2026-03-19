@@ -9,6 +9,7 @@ authors = ["xi72yow"]
 [dependencies]
 clap = { version = "4.6.0", features = ["derive"] }
 ctrlc = "3.4"
+mimalloc = "0.1"
 evdev = "0.13.2"
 nix = { version = "0.31.2", features = ["ioctl", "poll"] }
 serde = { version = "1.0.228", features = ["derive"] }
