@@ -94,24 +94,45 @@ Presets configured with autoload in `config.json` are automatically applied when
 
 ## Development
 
-```bash
-# Build
-docker compose run --rm dev cargo build
+No local Rust toolchain needed — everything runs in a Docker/Podman container.
 
-# Build release
-docker compose run --rm dev cargo build --release
+### Prerequisites
+
+- Podman with compose support (or Docker)
+- `sudo` access (for deploying and systemd)
+
+### Setup
+
+```bash
+# Build the dev container (includes Rust, musl-tools, cargo-deb)
+podman compose build dev
+```
+
+### Build & Test
+
+All builds target `x86_64-unknown-linux-musl` for a fully static binary.
+
+```bash
+# Debug build
+podman compose run --rm dev cargo build --target x86_64-unknown-linux-musl
+
+# Release build
+podman compose run --rm dev cargo build --release --target x86_64-unknown-linux-musl
 
 # Run tests (needs /dev/uinput, runs as root in container)
-docker compose run --rm dev cargo test
+podman compose run --rm dev cargo test --target x86_64-unknown-linux-musl
 
-# Quick dev install (after build)
-docker compose run --rm dev cp /app/target/debug/input-remapper-rs /app/dist/
+# Build .deb package
+podman compose run --rm dev cargo deb --target x86_64-unknown-linux-musl
+```
+
+### Quick Dev Deploy
+
+```bash
+podman compose run --rm dev cp /app/target/x86_64-unknown-linux-musl/debug/input-remapper-rs /app/dist/
 sudo systemctl stop input-remapper-rs
 sudo cp dist/input-remapper-rs /usr/bin/
 sudo systemctl start input-remapper-rs
-
-# Build .deb package
-docker compose run --rm dev cargo deb
 ```
 
 ## License
