@@ -9,11 +9,10 @@ services:
     volumes:
       - .:/app
       - cargo-cache:/usr/local/cargo/registry
-      - cargo-target:/app/target
-      - ./dist:/app/dist
+      - target-cache:/app/target
     stdin_open: true
     tty: true
 
 volumes:
   cargo-cache:
-  cargo-target:
+  target-cache:

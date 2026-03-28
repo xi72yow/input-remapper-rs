@@ -21,68 +21,94 @@ permissions:
   id-token: write
 
 jobs:
-  test:
+  build-image:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build container image
+        uses: docker/build-push-action@v6
         with:
-          targets: x86_64-unknown-linux-musl
+          context: .
+          file: Containerfile
+          load: true
+          tags: build-image
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-      - name: Install musl tools
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Save container image
+        run: docker save build-image | zstd -T0 -o image.tar.zst
 
-      - name: Cache cargo
-        uses: actions/cache@v5
+      - name: Upload container image
+        uses: actions/upload-artifact@v4
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-musl-${{ hashFiles('Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-musl-
+          name: build-image
+          path: image.tar.zst
+          retention-days: 1
 
-      - name: Load uinput module
+  test:
+    needs: build-image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download container image
+        uses: actions/download-artifact@v4
+        with:
+          name: build-image
+
+      - name: Load container image
+        run: zstd -d image.tar.zst -o image.tar && docker load < image.tar
+
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Load kernel modules
         run: sudo modprobe uinput
 
-      - name: Build
-        run: cargo build --release --target x86_64-unknown-linux-musl
+      - name: Run tests in container
+        run: |
+          docker run --rm \
+            --device /dev/uinput:/dev/uinput \
+            -v $(pwd):/app \
+            build-image \
+            cargo test --target x86_64-unknown-linux-musl -- --test-threads=1
 
-      - name: Run tests
-        run: sudo -E $(which cargo) test --target x86_64-unknown-linux-musl -- --test-threads=1
+  audit:
+    needs: build-image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download container image
+        uses: actions/download-artifact@v4
+        with:
+          name: build-image
+
+      - name: Load container image
+        run: zstd -d image.tar.zst -o image.tar && docker load < image.tar
+
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Run cargo audit in container
+        run: |
+          docker run --rm \
+            -v $(pwd):/app \
+            build-image \
+            cargo audit
 
   release:
-    needs: test
+    needs: [test, audit]
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.release == 'yes'
     runs-on: ubuntu-latest
     outputs:
-      skipped: ${{ steps.version.outputs.skip }}
+      tag: ${{ steps.version.outputs.tag }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-unknown-linux-musl
-
-      - name: Install musl tools
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
-
-      - name: Cache cargo
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-musl-${{ hashFiles('Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-musl-
 
       - name: Determine version
         id: version
@@ -94,7 +120,6 @@ jobs:
             BASE="v${VERSION}"
           fi
 
-          # Find latest revision for this version
           git fetch --tags
           LATEST_TAG=$(git tag -l "${BASE}-*" --sort=-v:refname | head -1)
           if [ -n "$LATEST_TAG" ]; then
@@ -113,26 +138,30 @@ jobs:
           echo "revision=${NEW_REV}" >> "$GITHUB_OUTPUT"
           echo "Release tag: ${TAG}"
 
-      - name: Install cargo-deb
-        run: cargo install cargo-deb
+      - name: Download container image
+        uses: actions/download-artifact@v4
+        with:
+          name: build-image
 
-      - name: Build .deb
-        run: cargo deb --deb-revision "${{ steps.version.outputs.revision }}" --target x86_64-unknown-linux-musl
+      - name: Load container image
+        run: zstd -d image.tar.zst -o image.tar && docker load < image.tar
+
+      - name: Build release and .deb in container
+        run: |
+          docker run --rm \
+            -v $(pwd):/app \
+            build-image \
+            bash -c "cargo audit && cargo auditable build --release --target x86_64-unknown-linux-musl && cargo deb --no-build --deb-revision ${{ steps.version.outputs.revision }} --target x86_64-unknown-linux-musl"
 
       - name: Test .deb package
         run: |
-          DEB=$(ls target/debian/*.deb)
+          DEB=$(ls target/debian/*.deb | head -1)
           echo "=== Package contents ==="
           dpkg-deb -c "$DEB"
-
           echo "=== Test install ==="
           sudo dpkg -i "$DEB"
-
           echo "=== Verify binary ==="
           input-remapper-rs --version
-
-          echo "=== Verify systemd unit ==="
-          systemctl cat input-remapper-rs.service
 
       - name: Prepare packages directory
         run: |
@@ -142,15 +171,11 @@ jobs:
       - name: Import GPG key
         env:
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
-        run: |
-          echo "${GPG_PRIVATE_KEY}" | gpg --batch --import
+        run: echo "${GPG_PRIVATE_KEY}" | gpg --batch --import
 
       - name: Update APT repository
-        env:
-          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
         run: |
-          sudo apt-get update
-          sudo apt-get install -y dpkg-dev apt-utils
+          sudo apt-get update && sudo apt-get install -y dpkg-dev apt-utils
           ./scripts/update-repo.sh
 
       - name: Create tag
@@ -182,4 +207,4 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5

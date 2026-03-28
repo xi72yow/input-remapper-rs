@@ -21,15 +21,16 @@ crossterm = "0.29"
 tempfile = "3"
 
 [package.metadata.deb]
-maintainer = "xi72yow"
+maintainer = "xi72yow <xi72yow@github.com>"
 section = "utils"
 priority = "optional"
 assets = [
     ["target/release/input-remapper-rs", "usr/bin/", "755"],
+    ["systemd/input-remapper-rs.service", "lib/systemd/system/", "644"],
     ["etc/input-remapper-rs/config.json", "etc/input-remapper-rs/", "644"],
     ["etc/input-remapper-rs/xmodmap.json", "etc/input-remapper-rs/", "644"],
 ]
-systemd-units = { unit-name = "input-remapper-rs", enable = true }
+systemd-units = { unit-name = "input-remapper-rs", enable = true, start = false }
 conf-files = ["/etc/input-remapper-rs/config.json", "/etc/input-remapper-rs/xmodmap.json"]
 
 [profile.release]
