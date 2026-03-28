@@ -12,7 +12,7 @@ Rust rewrite of [input-remapper](https://github.com/sezanzeb/input-remapper), fo
 - Multi-device support with simultaneous mapping
 - Terminal UI (TUI) for interactive configuration
 - Daemon with systemd service and autoload
-- ~2,6MB static binary, microsecond-level latency
+- ~2MB static binary, microsecond-level latency
 
 ## Install
 
