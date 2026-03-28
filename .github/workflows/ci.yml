@@ -72,6 +72,7 @@ jobs:
         run: |
           docker run --rm \
             --privileged \
+            -v /dev:/dev \
             -v $(pwd):/app \
             build-image \
             cargo test --target x86_64-unknown-linux-musl -- --test-threads=1
