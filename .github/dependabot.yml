@@ -3,10 +3,27 @@ updates:
   - package-ecosystem: "cargo"
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     allow:
-      - dependency-type: "all"
+      - dependency-name: "clap"
+      - dependency-name: "ctrlc"
+      - dependency-name: "mimalloc"
+      - dependency-name: "evdev"
+      - dependency-name: "nix"
+      - dependency-name: "serde"
+      - dependency-name: "serde_json"
+      - dependency-name: "ratatui"
+      - dependency-name: "crossterm"
+      - dependency-name: "tempfile"
+    groups:
+      all-cargo:
+        patterns:
+          - "*"
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
+    groups:
+      all-actions:
+        patterns:
+          - "*"
