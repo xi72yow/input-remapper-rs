@@ -25,7 +25,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -63,7 +63,7 @@ jobs:
         run: zstd -d image.tar.zst -o image.tar && docker load < image.tar
 
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Load uinput module
         run: sudo modprobe uinput
@@ -90,7 +90,7 @@ jobs:
         run: zstd -d image.tar.zst -o image.tar && docker load < image.tar
 
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Run cargo audit in container
         run: |
@@ -107,7 +107,7 @@ jobs:
       tag: ${{ steps.version.outputs.tag }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
