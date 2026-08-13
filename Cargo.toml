@@ -26,11 +26,10 @@ section = "utils"
 priority = "optional"
 assets = [
     ["target/release/input-remapper-rs", "usr/bin/", "755"],
-    ["systemd/input-remapper-rs.service", "lib/systemd/system/", "644"],
     ["etc/input-remapper-rs/config.json", "etc/input-remapper-rs/", "644"],
     ["etc/input-remapper-rs/xmodmap.json", "etc/input-remapper-rs/", "644"],
 ]
-systemd-units = { unit-name = "input-remapper-rs", enable = true, start = false }
+systemd-units = { unit-name = "input-remapper-rs", unit-scripts = "systemd", enable = true, start = false }
 conf-files = ["/etc/input-remapper-rs/config.json", "/etc/input-remapper-rs/xmodmap.json"]
 
 [profile.release]
